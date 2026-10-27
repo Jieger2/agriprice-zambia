@@ -1,0 +1,15 @@
+title = "AgriPrice Zambia secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "africastalking-api-key"
+description = "Africa's Talking API key"
+regex = '''(?i)(atsk_[a-f0-9]{60,})'''
+tags = ["key", "africastalking"]
+
+[allowlist]
+description = "Test fixtures use obviously fake values"
+paths = ['''tests/.*''']
+regexes = ['''testing''', '''cb-token''', '''test-pepper''']

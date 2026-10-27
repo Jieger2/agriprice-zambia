@@ -1,0 +1,16 @@
+# Each skipped check is a deliberate, documented trade-off - see docs/security.md#accepted-checkov-findings
+framework: [cloudformation]
+compact: true
+quiet: true
+skip-check:
+  - CKV_AWS_27   # SQS uses SSE-SQS (SqsManagedSseEnabled); checkov only recognises KMS keys
+  - CKV_AWS_18   # S3 server access logs: CloudTrail covers API activity; per-request logs add cost with no marker value
+  - CKV_AWS_28   # PITR is enabled for prod; dev and the idempotency table are rebuildable
+  - CKV_AWS_21   # versioning is on for lake/trail; web and artifact buckets are rebuilt from Git
+  - CKV_AWS_119  # DynamoDB uses the AWS managed KMS key (no $1/month per customer-managed key)
+  - CKV_AWS_88   # the fck-nat instance must have a public IP to perform NAT
+  - CKV_AWS_86   # CloudFront access logs: not needed at pilot scale (cost)
+  - CKV_AWS_68   # WAF (~$5+/month) replaced by API Gateway throttling + Cognito
+  - CKV_AWS_35   # CloudTrail logs use SSE-S3 rather than a customer-managed KMS key (cost)
+  - CKV_AWS_26   # alarm topic carries no data; CloudWatch cannot publish to an SNS topic using the aws/sns managed key
+  - CKV_AWS_174  # default *.cloudfront.net certificate; TLS1.2_2021 minimum needs a custom domain + ACM cert

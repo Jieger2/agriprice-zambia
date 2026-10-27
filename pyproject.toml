@@ -1,0 +1,38 @@
+[project]
+name = "agriprice-zambia"
+version = "1.0.0"
+description = "Cloud-native, low-bandwidth agricultural market intelligence platform for Zambia (AWS serverless)"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 240
+target-version = "py312"
+extend-exclude = [".aws-sam"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+ignore = ["S101", "S311", "S608", "B008", "SIM105"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "SIM"]
+"scripts/**" = ["S603", "S607", "S105"]
+# URL opened is a fixed https:// endpoint or validated to start with https://
+"shared/agricommon/sms.py" = ["S310"]
+"services/ingestion/ingestion_app.py" = ["S310"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agricommon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "-q -p no:cacheprovider"
+filterwarnings = ["ignore::UserWarning", "ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["shared/agricommon", "services"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
+skip_empty = true
