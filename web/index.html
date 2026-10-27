@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2f5d34">
+<meta name="description" content="Current crop prices, seasonal trends and buyer matching for Zambian farmers">
+<title>AgriPrice Zambia</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <h1>AgriPrice <span>Zambia</span></h1>
+  <span id="net" class="pill" aria-live="polite"></span>
+  <button id="auth" class="link" type="button">Sign in</button>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="prices" aria-selected="true">Prices</button>
+  <button role="tab" data-tab="trends">Trends</button>
+  <button role="tab" data-tab="buy" data-role="buyers">Buy</button>
+  <button role="tab" data-tab="officer" data-role="officers">Officer</button>
+</nav>
+
+<main>
+  <section id="prices" class="panel">
+    <form id="price-form" class="row">
+      <label>Crop <select name="c" class="crops"></select></label>
+      <label>Near <select name="near" class="markets"><option value="">All markets</option></select></label>
+      <button type="submit">Show</button>
+    </form>
+    <p id="price-meta" class="muted"></p>
+    <table id="price-table" class="grid"><thead><tr><th>Market</th><th>K / 50 kg</th><th>Change</th><th>Date</th></tr></thead><tbody></tbody></table>
+    <p class="muted small">Feature phone? Dial the USSD code or SMS <b>PRICE MAIZE</b>.</p>
+  </section>
+
+  <section id="trends" class="panel" hidden>
+    <form id="trend-form" class="row">
+      <label>Crop <select name="c" class="crops"></select></label>
+      <label>Province <select name="r" class="provinces"><option value="ZM">All Zambia</option></select></label>
+      <button type="submit">Show</button>
+    </form>
+    <div id="chart" class="chart" role="img" aria-label="Monthly price trend"></div>
+    <h3>Seasonal index <small class="muted">(100 = yearly average)</small></h3>
+    <div id="season" class="season"></div>
+  </section>
+
+  <section id="buy" class="panel" hidden>
+    <h2>Post demand</h2>
+    <form id="demand-form" class="stack">
+      <label>Crop <select name="c" class="crops"></select></label>
+      <label>Quantity (kg) <input name="q" type="number" min="1" required></label>
+      <label>Max price (K per 50 kg) <input name="pk" type="number" min="1" required></label>
+      <label>Collection point <select name="m" class="markets" required></select></label>
+      <label>Radius (km) <input name="r" type="number" min="1" max="150" value="50"></label>
+      <button type="submit">Post demand</button>
+    </form>
+    <h3>My demand</h3>
+    <ul id="mine" class="list"></ul>
+  </section>
+
+  <section id="officer" class="panel" hidden>
+    <h2>Register farmer</h2>
+    <form id="farmer-form" class="stack">
+      <label>Phone <input name="phone" inputmode="tel" required placeholder="0977..."></label>
+      <label>Name <input name="name" maxlength="60"></label>
+      <label>Market <select name="m" class="markets" required></select></label>
+      <label>Language <select name="lang"><option value="en">English</option><option value="bem">Bemba</option><option value="nya">Nyanja</option></select></label>
+      <button type="submit">Register</button>
+    </form>
+    <h2>List crop for farmer</h2>
+    <form id="listing-form" class="stack">
+      <label>Farmer phone <input name="phone" inputmode="tel" required></label>
+      <label>Crop <select name="c" class="crops"></select></label>
+      <label>Quantity (kg) <input name="q" type="number" min="1" required></label>
+      <button type="submit">List</button>
+    </form>
+    <h2>Field price report</h2>
+    <form id="field-form" class="stack">
+      <label>Crop <select name="c" class="crops"></select></label>
+      <label>Market <select name="m" class="markets" required></select></label>
+      <label>Price (K per 50 kg) <input name="pk" type="number" min="1" required></label>
+      <label>Date <input name="d" type="date"></label>
+      <button type="submit">Submit</button>
+    </form>
+  </section>
+  <p id="toast" class="toast" role="status" hidden></p>
+</main>
+<footer class="muted small">Outbox: <span id="outbox">0</span> pending · <span id="who"></span></footer>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
