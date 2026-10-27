@@ -43,7 +43,7 @@ The local server ingests the bundled **synthetic** sample prices (`data/zambia_s
 
 ## Deploy to AWS
 
-Requirements: Python 3.12, [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), and AWS credentials for a standalone account. The default Region is `af-south-1` (Cape Town), which you must first enable under *Account → AWS Regions*.
+Requirements: Python 3.12, [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), and AWS credentials for a standalone account. The default Region is `eu-north-1` (Stockholm), which is enabled on every account. To use another Region, set `AWS_REGION` locally and the repository variable `AWS_REGION` for CI. For example, use `af-south-1` (Cape Town) once it has been opted in under *Account → AWS Regions*; nothing else changes.
 
 ```bash
 python scripts/deploy.py bootstrap            # once per account: OIDC role for GitHub, artifacts bucket, $20 budget
@@ -91,4 +91,4 @@ The `seed` source loads the synthetic CSV so every feature can be demonstrated. 
 
 ## Team
 
-See `CONTRIBUTING.md` for the branch-per-service workflow. Roles and GitHub usernames are added to `.github/CODEOWNERS`.
+See `CONTRIBUTING.md` for the branch-per-service workflow. The team roster and roles are in `TEAM.md`, and review ownership is in `.github/CODEOWNERS`. Both are plain text, so edit them in a pull request whenever roles change.

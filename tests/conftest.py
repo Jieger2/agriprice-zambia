@@ -17,7 +17,7 @@ for svc in (ROOT / "services").iterdir():
     if svc.is_dir():
         sys.path.insert(0, str(svc))
 
-REGION = "af-south-1"
+REGION = "eu-north-1"
 os.environ.update({
     "AWS_DEFAULT_REGION": REGION,
     "AWS_REGION": REGION,

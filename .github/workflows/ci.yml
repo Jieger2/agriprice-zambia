@@ -76,7 +76,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'af-south-1' }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
       - run: pip install boto3 requests pytest
       - name: Deploy all stacks (dev)
         env: { WFP_CSV_URL: "${{ vars.WFP_CSV_URL }}" }
@@ -98,7 +98,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'af-south-1' }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-north-1' }}
       - run: pip install boto3 requests pytest
       - name: Deploy all stacks (prod, 10% canary with alarm-based automatic rollback)
         env: { WFP_CSV_URL: "${{ vars.WFP_CSV_URL }}" }
