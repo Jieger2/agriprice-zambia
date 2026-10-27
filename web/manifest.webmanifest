@@ -1,0 +1,9 @@
+{
+  "name": "AgriPrice Zambia",
+  "short_name": "AgriPrice",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#2f5d34",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
