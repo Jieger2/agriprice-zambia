@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AgriPrice Zambia - one-time bootstrap. GitHub Actions authenticates with
+  OpenID Connect (no stored AWS keys). The GitHub role can only drive
+  CloudFormation for agriprice-* stacks; CloudFormation itself uses a separate
+  execution role, so the CI identity never holds broad permissions directly.
+
+Parameters:
+  GitHubOwner: { Type: String, Default: Jieger2 }
+  GitHubRepo: { Type: String, Default: agriprice-zambia }
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: false if this account already has token.actions.githubusercontent.com
+
+Conditions:
+  MakeOidc: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "agriprice-artifacts-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption: { ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }] }
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      LifecycleConfiguration: { Rules: [{ Id: expire, Status: Enabled, ExpirationInDays: 30 }] }
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt ArtifactsBucket.Arn, !Sub "${ArtifactsBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # Role assumed by CloudFormation while it creates/updates agriprice-* stacks.
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: agriprice-cfn-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: cloudformation.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/PowerUserAccess"]
+      Policies:
+        - PolicyName: manage-agriprice-iam-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ProjectRolesOnly
+                Effect: Allow
+                Action: [iam:CreateRole, iam:DeleteRole, iam:GetRole, iam:UpdateRole, iam:TagRole, iam:UntagRole, iam:PassRole,
+                         iam:PutRolePolicy, iam:GetRolePolicy, iam:DeleteRolePolicy, iam:AttachRolePolicy, iam:DetachRolePolicy,
+                         iam:UpdateAssumeRolePolicy, iam:ListRolePolicies, iam:ListAttachedRolePolicies,
+                         iam:CreateInstanceProfile, iam:DeleteInstanceProfile, iam:GetInstanceProfile,
+                         iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/agriprice-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/agriprice-*"
+              - Sid: ServiceLinkedRoles  # DynamoDB auto-scaling, EC2 Auto Scaling, etc.
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/*"
+
+  # Role assumed by GitHub Actions through OIDC.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: agriprice-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com" }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals: { "token.actions.githubusercontent.com:aud": sts.amazonaws.com }
+              StringLike:
+                "token.actions.githubusercontent.com:sub":
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepo}:ref:refs/heads/main"
+                  - !Sub "repo:${GitHubOwner}/${GitHubRepo}:environment:*"
+      Policies:
+        - PolicyName: deploy-via-cloudformation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ProjectStacks
+                Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/agriprice-*/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:changeSet/*"
+                  - !Sub "arn:${AWS::Partition}:cloudformation:*:aws:transform/Serverless-2016-10-31"
+              - Sid: CfnReadOnly
+                Effect: Allow
+                Action: [cloudformation:ValidateTemplate, cloudformation:GetTemplateSummary, cloudformation:ListExports, cloudformation:ListStacks, cloudformation:DescribeStacks]
+                Resource: "*"
+              - Sid: PassOnlyExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecutionRole.Arn
+              - Sid: Artifacts
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject, s3:ListBucket, s3:GetBucketLocation]
+                Resource: [!GetAtt ArtifactsBucket.Arn, !Sub "${ArtifactsBucket.Arn}/*"]
+              - Sid: PublishWebAndSeed
+                Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetObject]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::agriprice-*-web-${AWS::AccountId}"
+                  - !Sub "arn:${AWS::Partition}:s3:::agriprice-*-web-${AWS::AccountId}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::agriprice-*-lake-${AWS::AccountId}"
+                  - !Sub "arn:${AWS::Partition}:s3:::agriprice-*-lake-${AWS::AccountId}/seed/*"
+              - Sid: InvalidateCdn
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*"
+              - Sid: FindNatAmi
+                Effect: Allow
+                Action: ec2:DescribeImages
+                Resource: "*"
+              - Sid: ProjectSecrets  # deploy.py creates missing SecureString parameters (never reads them into logs)
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:PutParameter]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter/agriprice/*"
+              - Sid: PostDeployTriggers  # run ingestion + analytics refresh after deploy, smoke tests
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:agriprice-*"
+
+Outputs:
+  GitHubDeployRoleArn:
+    Description: Save as GitHub repository variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubDeployRole.Arn
+  CfnExecutionRoleArn:
+    Value: !GetAtt CfnExecutionRole.Arn
+  ArtifactsBucketName:
+    Value: !Ref ArtifactsBucket

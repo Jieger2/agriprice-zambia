@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AgriPrice Zambia - Service 3, scheduled Price Ingestion (independently deployable stack)
+
+Parameters:
+  Env: { Type: String, AllowedValues: [dev, prod] }
+  DeploymentType: { Type: String, Default: AllAtOnce }
+  LogRetentionDays: { Type: Number, Default: 14 }
+  Schedule: { Type: String, Default: "rate(6 hours)" }
+  SourcesJson:
+    Type: String
+    Default: '[{"id":"seed","type":"wfp_csv_s3","key":"seed/zambia_sample_prices.csv"},{"id":"field","type":"s3_inbox","prefix":"inbox/field/"}]'
+    Description: Price sources. scripts/deploy.py adds the live WFP/HDX CSV when WFP_CSV_URL is set.
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Tracing: Active
+    Layers: [!Ref SharedLayer]
+    VpcConfig:
+      SubnetIds: !Split [",", !ImportValue { "Fn::Sub": "agriprice-${Env}-PrivateSubnetIds" }]
+      SecurityGroupIds: [!ImportValue { "Fn::Sub": "agriprice-${Env}-LambdaSgId" }]
+    Environment:
+      Variables:
+        APP_ENV: !Ref Env
+        TABLE_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableName" }
+        PARAM_PREFIX: !Sub "/agriprice/${Env}"
+        POWERTOOLS_METRICS_NAMESPACE: AgriPrice
+        POWERTOOLS_LOG_LEVEL: INFO
+    Tags: { service: ingestion, project: agriprice }
+
+Resources:
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "agriprice-${Env}-ingestion-shared"
+      ContentUri: ../../shared
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+    Metadata: { BuildMethod: python3.12, BuildArchitecture: arm64 }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/lambda/agriprice-${Env}-ingestion", RetentionInDays: !Ref LogRetentionDays }
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "agriprice-${Env}-ingestion"
+      Description: Fetch, normalise and store price data; publish changes to SQS
+      CodeUri: .
+      Handler: ingestion_app.handler
+      Timeout: 300
+      MemorySize: 1024
+      LoggingConfig: { LogGroup: !Ref LogGroup }
+      AutoPublishAlias: live
+      DeploymentPreference: { Type: !Ref DeploymentType }
+      EventInvokeConfig: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
+      DeadLetterQueue: { Type: SQS, TargetArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-IngestionDlqArn" } }
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: ingestion
+          LAKE_BUCKET: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
+          PRICE_QUEUE_URL: !ImportValue { "Fn::Sub": "agriprice-${Env}-PriceQueueUrl" }
+          GLUE_DATABASE: !ImportValue { "Fn::Sub": "agriprice-${Env}-GlueDatabase" }
+          ATHENA_WORKGROUP: !ImportValue { "Fn::Sub": "agriprice-${Env}-AthenaWorkGroup" }
+          SOURCES_JSON: !Ref SourcesJson
+          LOOKBACK_DAYS: "730"
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: CurrentPricesAndWatermarks
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["PRICE#*", "SOURCE#*"]
+            - Sid: PublishPriceChanges
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-PriceQueueArn" }
+            - Sid: LakeList
+              Effect: Allow
+              Action: [s3:ListBucket, s3:GetBucketLocation]
+              Resource: !Sub
+                - "arn:${AWS::Partition}:s3:::${Bucket}"
+                - Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
+            - Sid: LakeObjects  # Athena INSERT INTO runs with this role's credentials, so it also writes curated/ and athena-results/
+              Effect: Allow
+              Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+              Resource:
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/seed/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/raw/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/inbox/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/processed/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/curated/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+                - !Sub ["arn:${AWS::Partition}:s3:::${Bucket}/athena-results/*", { Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" } }]
+            - Sid: RunCurationQuery
+              Effect: Allow
+              Action: [athena:StartQueryExecution, athena:GetQueryExecution]
+              Resource: !Sub
+                - "arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${WG}"
+                - WG: !ImportValue { "Fn::Sub": "agriprice-${Env}-AthenaWorkGroup" }
+            - Sid: CatalogForCuration
+              Effect: Allow
+              Action: [glue:GetDatabase, glue:GetTable, glue:GetPartition, glue:GetPartitions, glue:BatchCreatePartition, glue:CreatePartition, glue:BatchGetPartition]
+              Resource:
+                - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                - !Sub ["arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${Db}", { Db: !ImportValue { "Fn::Sub": "agriprice-${Env}-GlueDatabase" } }]
+                - !Sub ["arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${Db}/*", { Db: !ImportValue { "Fn::Sub": "agriprice-${Env}-GlueDatabase" } }]
+      Events:
+        Every6Hours:
+          Type: Schedule
+          Properties: { Schedule: !Ref Schedule, Description: Scheduled price ingestion }
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-ingestion-source-failures"
+      AlarmDescription: "One or more price sources failed in a run (freshness SLO). Runbook: docs/runbooks.md#ingestion"
+      Namespace: AgriPrice
+      MetricName: IngestionFailures
+      Dimensions: [{ Name: service, Value: ingestion }]
+      Statistic: Sum
+      Period: 21600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+
+Outputs:
+  FunctionName:
+    Value: !Ref Function
+    Export: { Name: !Sub "agriprice-${Env}-IngestionFunctionName" }

@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AgriPrice Zambia - monthly cost budget with email alerts (deployed to us-east-1; AWS Budgets is global)
+
+Parameters:
+  MonthlyLimitUsd: { Type: Number, Default: 20 }
+  AlertEmail: { Type: String, Default: agrizambia5@gmail.com }
+
+Resources:
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: agriprice-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref MonthlyLimitUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 25, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
