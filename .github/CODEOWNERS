@@ -1,24 +1,26 @@
 # Review ownership - keep in sync with TEAM.md (edit both in the same pull request).
 # Later rules override earlier ones; the team lead is a fallback reviewer on everything.
-*                               @Aaron28Zulu
+*                               @Jieger2
 
-/infra/network.yaml             @Aaron28Zulu
-/infra/data.yaml                @Aaron28Zulu
-/services/matching/             @Aaron28Zulu
-/docs/architecture.md           @Aaron28Zulu
+/infra/network.yaml             @Jieger2
+/infra/data.yaml                @Jieger2
+/services/matching/             @Jieger2
+/docs/architecture.md           @Jieger2
 
-/.github/                       @Benaiah09 @Aaron28Zulu
+/.github/                       @Benaiah09 @Jieger2
 /infra/bootstrap.yaml           @Benaiah09
-/infra/budget.yaml              @Benaiah09
-/infra/observability.yaml       @Benaiah09
 /scripts/deploy.py              @Benaiah09
 /docs/security.md               @Benaiah09
-/docs/runbooks.md               @Benaiah09
-/docs/slo.md                    @Benaiah09
+
+/infra/observability.yaml       @victorwilliamkangomu-bot
+/infra/budget.yaml              @victorwilliamkangomu-bot
+/docs/slo.md                    @victorwilliamkangomu-bot
+/docs/runbooks.md               @victorwilliamkangomu-bot
+/tests/smoke/                   @victorwilliamkangomu-bot
 
 /services/listings_api/         @Jedyn128
 /services/alerts/               @Jedyn128
-/shared/                        @Jedyn128 @Aaron28Zulu
+/shared/                        @Jedyn128 @Jieger2
 
 /services/ingestion/            @oliverkakungu
 /services/analytics_api/        @oliverkakungu
@@ -29,8 +31,8 @@
 /services/ussd_gateway/         @Mwewacs
 /web/                           @Mwewacs
 /load/                          @Mwewacs
-/tests/                         @Mwewacs
+/tests/unit/                    @Mwewacs
 /docs/demo-script.md            @Mwewacs
 /docs/i18n-review.md            @Mwewacs
 
-/TEAM.md                        @Aaron28Zulu
+/TEAM.md                        @Jieger2
