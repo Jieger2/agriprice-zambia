@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AgriPrice Zambia - CloudWatch dashboard (golden signals, SLOs, business metrics)
+
+Parameters:
+  Env: { Type: String, AllowedValues: [dev, prod] }
+
+Resources:
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "agriprice-${Env}"
+      DashboardBody: !Sub |
+        {
+          "start": "-PT6H",
+          "widgets": [
+            {"type":"text","x":0,"y":0,"width":24,"height":2,"properties":{"markdown":"## AgriPrice Zambia (${Env}) - golden signals\nCore journey: farmer dials USSD -> picks crop -> gets regional price. SLOs: availability >= 99.5%, p95 <= 1,000 ms, alerts within 10 min. Runbooks: docs/runbooks.md"}},
+
+            {"type":"metric","x":0,"y":2,"width":8,"height":6,"properties":{"title":"SLO - USSD availability (%)","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":300,
+              "metrics":[
+                [{"expression":"100*(1-m5xx/IF(mcount==0,1,mcount))","label":"availability %","id":"avail"}],
+                ["AWS/ApiGateway","5XXError","ApiName","agriprice-${Env}-ussd","Stage","live",{"id":"m5xx","visible":false}],
+                ["AWS/ApiGateway","Count","ApiName","agriprice-${Env}-ussd","Stage","live",{"id":"mcount","visible":false}]
+              ],
+              "yAxis":{"left":{"min":95,"max":100}},"annotations":{"horizontal":[{"value":99.5,"label":"SLO 99.5%"}]}}},
+            {"type":"metric","x":8,"y":2,"width":8,"height":6,"properties":{"title":"LATENCY - API p95 (ms)","region":"${AWS::Region}","view":"timeSeries","stat":"p95","period":60,
+              "metrics":[
+                ["AWS/ApiGateway","Latency","ApiName","agriprice-${Env}-ussd","Stage","live",{"label":"ussd"}],
+                ["AWS/ApiGateway","Latency","ApiName","agriprice-${Env}-listings","Stage","live",{"label":"listings"}],
+                ["AWS/ApiGateway","Latency","ApiName","agriprice-${Env}-analytics","Stage","live",{"label":"analytics"}]
+              ],
+              "annotations":{"horizontal":[{"value":1000,"label":"USSD SLO p95"}]}}},
+            {"type":"metric","x":16,"y":2,"width":8,"height":6,"properties":{"title":"LATENCY - Lambda duration p95 (ms)","region":"${AWS::Region}","view":"timeSeries","stat":"p95","period":60,
+              "metrics":[
+                ["AWS/Lambda","Duration","FunctionName","agriprice-${Env}-ussd-gateway"],
+                ["AWS/Lambda","Duration","FunctionName","agriprice-${Env}-listings-api"],
+                ["AWS/Lambda","Duration","FunctionName","agriprice-${Env}-matching"],
+                ["AWS/Lambda","Duration","FunctionName","agriprice-${Env}-alerts"]
+              ]}},
+
+            {"type":"metric","x":0,"y":8,"width":8,"height":6,"properties":{"title":"TRAFFIC - API requests","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":60,
+              "metrics":[
+                ["AWS/ApiGateway","Count","ApiName","agriprice-${Env}-ussd","Stage","live",{"label":"ussd"}],
+                ["AWS/ApiGateway","Count","ApiName","agriprice-${Env}-listings","Stage","live",{"label":"listings"}],
+                ["AWS/ApiGateway","Count","ApiName","agriprice-${Env}-analytics","Stage","live",{"label":"analytics"}]
+              ]}},
+            {"type":"metric","x":8,"y":8,"width":8,"height":6,"properties":{"title":"TRAFFIC - async messages","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":300,
+              "metrics":[
+                ["AWS/SQS","NumberOfMessagesSent","QueueName","agriprice-${Env}-price-normalised",{"label":"price changes"}],
+                ["AWS/SQS","NumberOfMessagesSent","QueueName","agriprice-${Env}-match-requests",{"label":"match requests"}],
+                ["AgriPrice","IngestedRecords","service","ingestion",{"label":"ingested records"}]
+              ]}},
+            {"type":"metric","x":16,"y":8,"width":8,"height":6,"properties":{"title":"TRAFFIC - business events","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":3600,
+              "metrics":[
+                ["AgriPrice","UssdSessions","service","ussd-gateway"],
+                ["AgriPrice","PriceLookups","service","ussd-gateway"],
+                ["AgriPrice","PriceLookups","service","listings-api"],
+                ["AgriPrice","ListingsCreated","service","ussd-gateway"],
+                ["AgriPrice","MatchesFound","service","matching"],
+                ["AgriPrice","AlertsSent","service","alerts"]
+              ]}},
+
+            {"type":"metric","x":0,"y":14,"width":8,"height":6,"properties":{"title":"ERRORS - API 5xx / 4xx","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":60,
+              "metrics":[
+                ["AWS/ApiGateway","5XXError","ApiName","agriprice-${Env}-ussd","Stage","live",{"label":"ussd 5xx"}],
+                ["AWS/ApiGateway","5XXError","ApiName","agriprice-${Env}-listings","Stage","live",{"label":"listings 5xx"}],
+                ["AWS/ApiGateway","4XXError","ApiName","agriprice-${Env}-listings","Stage","live",{"label":"listings 4xx"}]
+              ]}},
+            {"type":"metric","x":8,"y":14,"width":8,"height":6,"properties":{"title":"ERRORS - Lambda errors","region":"${AWS::Region}","view":"timeSeries","stat":"Sum","period":60,
+              "metrics":[
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-ussd-gateway"],
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-listings-api"],
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-ingestion"],
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-matching"],
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-alerts"],
+                ["AWS/Lambda","Errors","FunctionName","agriprice-${Env}-analytics-api"]
+              ]}},
+            {"type":"metric","x":16,"y":14,"width":8,"height":6,"properties":{"title":"ERRORS - dead-letter queues","region":"${AWS::Region}","view":"timeSeries","stat":"Maximum","period":300,
+              "metrics":[
+                ["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","agriprice-${Env}-price-normalised-dlq"],
+                ["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","agriprice-${Env}-match-requests-dlq"],
+                ["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","agriprice-${Env}-ingestion-dlq"],
+                ["AgriPrice","IngestionFailures","service","ingestion",{"stat":"Sum"}]
+              ]}},
+
+            {"type":"metric","x":0,"y":20,"width":8,"height":6,"properties":{"title":"SATURATION - DynamoDB capacity (auto-scaling)","region":"${AWS::Region}","view":"timeSeries","period":60,
+              "metrics":[
+                ["AWS/DynamoDB","ConsumedReadCapacityUnits","TableName","agriprice-${Env}",{"stat":"Sum","id":"cr","visible":false}],
+                [{"expression":"cr/60","label":"consumed RCU/s","id":"crs"}],
+                ["AWS/DynamoDB","ProvisionedReadCapacityUnits","TableName","agriprice-${Env}",{"stat":"Maximum","label":"provisioned RCU"}],
+                ["AWS/DynamoDB","ConsumedWriteCapacityUnits","TableName","agriprice-${Env}",{"stat":"Sum","id":"cw","visible":false}],
+                [{"expression":"cw/60","label":"consumed WCU/s","id":"cws"}],
+                ["AWS/DynamoDB","ProvisionedWriteCapacityUnits","TableName","agriprice-${Env}",{"stat":"Maximum","label":"provisioned WCU"}]
+              ]}},
+            {"type":"metric","x":8,"y":20,"width":8,"height":6,"properties":{"title":"SATURATION - concurrency & throttles","region":"${AWS::Region}","view":"timeSeries","stat":"Maximum","period":60,
+              "metrics":[
+                ["AWS/Lambda","ConcurrentExecutions",{"label":"account concurrency"}],
+                ["AWS/Lambda","Throttles","FunctionName","agriprice-${Env}-ussd-gateway",{"stat":"Sum"}],
+                ["AWS/DynamoDB","ReadThrottleEvents","TableName","agriprice-${Env}",{"stat":"Sum"}],
+                ["AWS/DynamoDB","WriteThrottleEvents","TableName","agriprice-${Env}",{"stat":"Sum"}]
+              ]}},
+            {"type":"metric","x":16,"y":20,"width":8,"height":6,"properties":{"title":"SATURATION - queue age (s)","region":"${AWS::Region}","view":"timeSeries","stat":"Maximum","period":60,
+              "metrics":[
+                ["AWS/SQS","ApproximateAgeOfOldestMessage","QueueName","agriprice-${Env}-price-normalised"],
+                ["AWS/SQS","ApproximateAgeOfOldestMessage","QueueName","agriprice-${Env}-match-requests"]
+              ],
+              "annotations":{"horizontal":[{"value":600,"label":"alerts SLO 10 min"}]}}},
+
+            {"type":"log","x":0,"y":26,"width":24,"height":6,"properties":{"title":"Trace one request across services (paste a correlation_id into the filter)","region":"${AWS::Region}","view":"table",
+              "query":"SOURCE '/aws/lambda/agriprice-${Env}-ussd-gateway' | SOURCE '/aws/lambda/agriprice-${Env}-listings-api' | SOURCE '/aws/lambda/agriprice-${Env}-matching' | SOURCE '/aws/lambda/agriprice-${Env}-alerts' | SOURCE '/aws/lambda/agriprice-${Env}-ingestion' | fields @timestamp, service, level, message, correlation_id, xray_trace_id | filter ispresent(correlation_id) | sort @timestamp desc | limit 50"}}
+          ]
+        }
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=agriprice-${Env}"

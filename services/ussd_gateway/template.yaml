@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AgriPrice Zambia - Service 1, USSD/SMS Gateway (independently deployable stack)
+
+Parameters:
+  Env: { Type: String, AllowedValues: [dev, prod] }
+  SmsMode: { Type: String, AllowedValues: [log, sandbox, live], Default: sandbox }
+  AllowedCidrs: { Type: String, Default: "", Description: Optional comma-separated CIDRs for Africa's Talking callbacks }
+  DeploymentType: { Type: String, Default: AllAtOnce, Description: "prod uses Canary10Percent5Minutes" }
+  ChaosErrorRate: { Type: String, Default: "0", Description: "ONLY for the rollback demonstration (0-1)" }
+  LogRetentionDays: { Type: Number, Default: 14 }
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Tracing: Active
+    Timeout: 10
+    MemorySize: 512
+    Layers: [!Ref SharedLayer]
+    VpcConfig:
+      SubnetIds: !Split [",", !ImportValue { "Fn::Sub": "agriprice-${Env}-PrivateSubnetIds" }]
+      SecurityGroupIds: [!ImportValue { "Fn::Sub": "agriprice-${Env}-LambdaSgId" }]
+    Environment:
+      Variables:
+        APP_ENV: !Ref Env
+        TABLE_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableName" }
+        PARAM_PREFIX: !Sub "/agriprice/${Env}"
+        POWERTOOLS_METRICS_NAMESPACE: AgriPrice
+        POWERTOOLS_LOG_LEVEL: INFO
+        POWERTOOLS_LOGGER_SAMPLE_RATE: "0.01"
+    Tags: { service: ussd-gateway, project: agriprice }
+
+Resources:
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "agriprice-${Env}-ussd-shared"
+      ContentUri: ../../shared
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+    Metadata: { BuildMethod: python3.12, BuildArchitecture: arm64 }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/lambda/agriprice-${Env}-ussd-gateway", RetentionInDays: !Ref LogRetentionDays }
+  AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/apigateway/agriprice-${Env}-ussd", RetentionInDays: !Ref LogRetentionDays }
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "agriprice-${Env}-ussd"
+      StageName: live
+      EndpointConfiguration: { Type: REGIONAL }
+      TracingEnabled: true
+      MethodSettings:
+        - { ResourcePath: "/*", HttpMethod: "*", ThrottlingRateLimit: 50, ThrottlingBurstLimit: 100, MetricsEnabled: true }
+      AccessLogSetting:
+        DestinationArn: !GetAtt AccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","route":"$context.resourcePath","status":"$context.status","latency":"$context.responseLatency","integrationLatency":"$context.integrationLatency","bytes":"$context.responseLength"}'
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "agriprice-${Env}-ussd-gateway"
+      Description: USSD menu state machine and inbound SMS keywords
+      CodeUri: .
+      Handler: ussd_app.handler
+      LoggingConfig: { LogGroup: !Ref LogGroup }
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: !Ref DeploymentType
+        Alarms: [!Ref ErrorsAlarm, !Ref LatencyAlarm]
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: ussd-gateway
+          EVENT_BUS_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-EventBusName" }
+          SMS_MODE: !Ref SmsMode
+          ALLOWED_CIDRS: !Ref AllowedCidrs
+          CHAOS_ERROR_RATE: !Ref ChaosErrorRate
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: OwnKeysOnly  # fine-grained access: only the key prefixes this service owns or reads
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:BatchGetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["FARMER#*", "SESSION#*", "RESUME#*", "PRICE#*", "SUPPLY#*", "ALERT#*"]
+            - Sid: PublishDomainEvents
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-EventBusArn" }
+            - Sid: ReadOwnSecrets
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/agriprice/${Env}/at/*"
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/agriprice/${Env}/privacy/pepper"
+      Events:
+        Ussd:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /ussd, Method: POST }
+        Sms:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /sms, Method: POST }
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-ussd-gateway-errors"
+      AlarmDescription: "Lambda errors; triggers automatic rollback during canary. Runbook: docs/runbooks.md#errors"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Sub "agriprice-${Env}-ussd-gateway" }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+  LatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-ussd-latency-p95"
+      AlarmDescription: "USSD p95 > 1,500 ms for 10 min (SLO 95% <= 1,000 ms). Runbook: docs/runbooks.md#latency"
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions: [{ Name: FunctionName, Value: !Sub "agriprice-${Env}-ussd-gateway" }]
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-ussd-api-5xx"
+      AlarmDescription: "USSD API 5xx rate > 2% in 3 of 5 minutes (SLO 99.5% availability). Runbook: docs/runbooks.md#errors"
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions: [{ Name: ApiName, Value: !Sub "agriprice-${Env}-ussd" }, { Name: Stage, Value: live }]
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 0.02
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+
+Outputs:
+  ApiId:
+    Value: !Ref Api
+    Export: { Name: !Sub "agriprice-${Env}-UssdApiId" }
+  UssdCallbackUrl:
+    Description: Paste into Africa's Talking (append ?k=<callback_token>)
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/live/ussd"
+  SmsCallbackUrl:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/live/sms"
+  FunctionName:
+    Value: !Ref Function
+    Export: { Name: !Sub "agriprice-${Env}-UssdFunctionName" }

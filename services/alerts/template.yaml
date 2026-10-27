@@ -1,0 +1,104 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AgriPrice Zambia - Service 5, price threshold Alerts (independently deployable stack)
+
+Parameters:
+  Env: { Type: String, AllowedValues: [dev, prod] }
+  SmsMode: { Type: String, AllowedValues: [log, sandbox, live], Default: sandbox }
+  DeploymentType: { Type: String, Default: AllAtOnce }
+  LogRetentionDays: { Type: Number, Default: 14 }
+
+Resources:
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "agriprice-${Env}-alerts-shared"
+      ContentUri: ../../shared
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+    Metadata: { BuildMethod: python3.12, BuildArchitecture: arm64 }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/lambda/agriprice-${Env}-alerts", RetentionInDays: !Ref LogRetentionDays }
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "agriprice-${Env}-alerts"
+      Description: Send SMS when a new price crosses a farmer's threshold (once per crop per day)
+      CodeUri: .
+      Handler: alerts_app.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      Tracing: Active
+      Timeout: 60
+      MemorySize: 256
+      Layers: [!Ref SharedLayer]
+      LoggingConfig: { LogGroup: !Ref LogGroup }
+      AutoPublishAlias: live
+      DeploymentPreference: { Type: !Ref DeploymentType, Alarms: [!Ref ErrorsAlarm] }
+      VpcConfig:
+        SubnetIds: !Split [",", !ImportValue { "Fn::Sub": "agriprice-${Env}-PrivateSubnetIds" }]
+        SecurityGroupIds: [!ImportValue { "Fn::Sub": "agriprice-${Env}-LambdaSgId" }]
+      Environment:
+        Variables:
+          APP_ENV: !Ref Env
+          TABLE_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableName" }
+          PARAM_PREFIX: !Sub "/agriprice/${Env}"
+          POWERTOOLS_SERVICE_NAME: alerts
+          POWERTOOLS_METRICS_NAMESPACE: AgriPrice
+          POWERTOOLS_LOG_LEVEL: INFO
+          SMS_MODE: !Ref SmsMode
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: ReadSubscriptions
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["ALERT#*"]
+            - Sid: AlertDedupeLog
+              Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["ALERTLOG#*"]
+            - Sid: SmsGatewayCredentials
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/agriprice/${Env}/at/*"
+      Events:
+        PriceChanges:
+          Type: SQS
+          Properties:
+            Queue: !ImportValue { "Fn::Sub": "agriprice-${Env}-PriceQueueArn" }
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
+      Tags: { service: alerts, project: agriprice }
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-alerts-errors"
+      AlarmDescription: "Alerts errors. Runbook: docs/runbooks.md#errors"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Sub "agriprice-${Env}-alerts" }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+
+Outputs:
+  FunctionName:
+    Value: !Ref Function
+    Export: { Name: !Sub "agriprice-${Env}-AlertsFunctionName" }

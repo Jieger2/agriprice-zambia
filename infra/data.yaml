@@ -1,0 +1,544 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AgriPrice Zambia - shared data and messaging: DynamoDB (auto-scaled), S3 data
+  lake, Glue Data Catalog + Athena, SQS queues with DLQs, EventBridge bus,
+  Cognito user pool, alarm topic and CloudTrail.
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, prod]
+  AlertEmail:
+    Type: String
+    Default: agrizambia5@gmail.com
+  MinCapacity:
+    Type: Number
+    Default: 2
+  MaxCapacity:
+    Type: Number
+    Default: 40
+  CreateTrail:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Set false in the second environment - one trail per account is free.
+  CreateApiGatewayAccount:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Account-level API Gateway logging role; set false if another stack already owns it.
+
+Conditions:
+  IsProd: !Equals [!Ref Env, prod]
+  MakeTrail: !Equals [!Ref CreateTrail, "true"]
+  MakeApiGwAccount: !Equals [!Ref CreateApiGatewayAccount, "true"]
+
+Resources:
+  # ---------------------------------------------------------------- DynamoDB
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "agriprice-${Env}"
+      BillingMode: PROVISIONED  # provisioned + target tracking makes auto-scaling demonstrable; see docs/cost.md
+      ProvisionedThroughput: { ReadCapacityUnits: !Ref MinCapacity, WriteCapacityUnits: !Ref MinCapacity }
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+          ProvisionedThroughput: { ReadCapacityUnits: 1, WriteCapacityUnits: 1 }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+      SSESpecification: { SSEEnabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: !If [IsProd, true, false] }
+      Tags: [{ Key: service, Value: data }]
+
+  TableReadTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: dynamodb
+      ResourceId: !Sub "table/${Table}"
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+  TableReadPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "agriprice-${Env}-read"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref TableReadTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 30
+        PredefinedMetricSpecification: { PredefinedMetricType: DynamoDBReadCapacityUtilization }
+  TableWriteTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: dynamodb
+      ResourceId: !Sub "table/${Table}"
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+  TableWritePolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "agriprice-${Env}-write"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref TableWriteTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 30
+        PredefinedMetricSpecification: { PredefinedMetricType: DynamoDBWriteCapacityUtilization }
+  IndexWriteTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: dynamodb
+      ResourceId: !Sub "table/${Table}/index/GSI1"
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      MinCapacity: 1
+      MaxCapacity: 10
+  IndexWritePolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "agriprice-${Env}-gsi1-write"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref IndexWriteTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        PredefinedMetricSpecification: { PredefinedMetricType: DynamoDBWriteCapacityUtilization }
+
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "agriprice-${Env}-idempotency"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{ AttributeName: id, AttributeType: S }]
+      KeySchema: [{ AttributeName: id, KeyType: HASH }]
+      TimeToLiveSpecification: { AttributeName: expiration, Enabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  # ---------------------------------------------------------------- S3 data lake
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "agriprice-${Env}-lake-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: "aws:kms" }  # AWS managed key aws/s3 (no monthly key fee)
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      OwnershipControls: { Rules: [{ ObjectOwnership: BucketOwnerEnforced }] }
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - { Id: expire-athena-results, Status: Enabled, Prefix: athena-results/, ExpirationInDays: 7 }
+          - { Id: expire-processed-inbox, Status: Enabled, Prefix: processed/, ExpirationInDays: 90 }
+          - { Id: raw-to-infrequent, Status: Enabled, Prefix: raw/, Transitions: [{ StorageClass: STANDARD_IA, TransitionInDays: 30 }] }
+          - { Id: old-versions, Status: Enabled, NoncurrentVersionExpiration: { NoncurrentDays: 30 } }
+  LakeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LakeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt LakeBucket.Arn, !Sub "${LakeBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+
+  # ---------------------------------------------------------------- Glue catalog + Athena (no crawlers, no ETL jobs)
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput: { Name: !Sub "agriprice_${Env}", Description: AgriPrice price history }
+  RawTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: raw_prices
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          projection.enabled: "true"
+          projection.ingest_date.type: date
+          projection.ingest_date.format: yyyy-MM-dd
+          projection.ingest_date.range: "2024-01-01,NOW"
+          storage.location.template: !Sub "s3://${LakeBucket}/raw/ingest_date=${!ingest_date}/"
+        PartitionKeys: [{ Name: ingest_date, Type: string }]
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/raw/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: { SerializationLibrary: org.openx.data.jsonserde.JsonSerDe }
+          Columns:
+            - { Name: obs_date, Type: string }
+            - { Name: commodity, Type: string }
+            - { Name: market, Type: string }
+            - { Name: province, Type: string }
+            - { Name: price_ngwee_kg, Type: int }
+            - { Name: source, Type: string }
+            - { Name: lat, Type: double }
+            - { Name: lon, Type: double }
+            - { Name: run_id, Type: string }
+  CuratedTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: curated_prices
+        TableType: EXTERNAL_TABLE
+        Parameters: { classification: parquet, parquet.compression: SNAPPY }
+        PartitionKeys:
+          - { Name: province, Type: string }
+          - { Name: month, Type: string }
+        StorageDescriptor:
+          Location: !Sub "s3://${LakeBucket}/curated/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo: { SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe }
+          Columns:
+            - { Name: obs_date, Type: date }
+            - { Name: commodity, Type: string }
+            - { Name: market, Type: string }
+            - { Name: price_ngwee_kg, Type: int }
+            - { Name: source, Type: string }
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "agriprice-${Env}"
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: 1073741824  # 1 GB guard rail: a runaway query cannot cost more than ~$0.005
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${LakeBucket}/athena-results/"
+          EncryptionConfiguration: { EncryptionOption: SSE_S3 }
+
+  # ---------------------------------------------------------------- async messaging
+  PriceDlq:
+    Type: AWS::SQS::Queue
+    Properties: { QueueName: !Sub "agriprice-${Env}-price-normalised-dlq", MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true }
+  PriceQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "agriprice-${Env}-price-normalised"
+      VisibilityTimeout: 180
+      SqsManagedSseEnabled: true
+      RedrivePolicy: { deadLetterTargetArn: !GetAtt PriceDlq.Arn, maxReceiveCount: 3 }
+  MatchDlq:
+    Type: AWS::SQS::Queue
+    Properties: { QueueName: !Sub "agriprice-${Env}-match-requests-dlq", MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true }
+  MatchQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "agriprice-${Env}-match-requests"
+      VisibilityTimeout: 180
+      SqsManagedSseEnabled: true
+      RedrivePolicy: { deadLetterTargetArn: !GetAtt MatchDlq.Arn, maxReceiveCount: 3 }
+  IngestionDlq:
+    Type: AWS::SQS::Queue
+    Properties: { QueueName: !Sub "agriprice-${Env}-ingestion-dlq", MessageRetentionPeriod: 1209600, SqsManagedSseEnabled: true }
+
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties: { Name: !Sub "agriprice-${Env}" }
+  MatchRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern: { source: [agriprice], detail-type: [ListingCreated, DemandPosted] }
+      Targets: [{ Id: match-requests, Arn: !GetAtt MatchQueue.Arn }]
+  MatchQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref MatchQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt MatchQueue.Arn
+            Condition: { ArnEquals: { aws:SourceArn: !GetAtt MatchRule.Arn } }
+
+  # ---------------------------------------------------------------- alarms topic
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "agriprice-${Env}-alarms"
+      Subscription: [{ Protocol: email, Endpoint: !Ref AlertEmail }]
+  AlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlarmTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudwatch.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition: { StringEquals: { aws:SourceAccount: !Ref AWS::AccountId } }
+
+  PriceDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-price-dlq-not-empty"
+      AlarmDescription: "Price changes failed 3 times. Runbook: docs/runbooks.md#dlq"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt PriceDlq.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+  MatchDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-match-dlq-not-empty"
+      AlarmDescription: "Matching events failed 3 times. Runbook: docs/runbooks.md#dlq"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt MatchDlq.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+  IngestionDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-ingestion-dlq-not-empty"
+      AlarmDescription: "An ingestion run failed after retries. Runbook: docs/runbooks.md#ingestion"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt IngestionDlq.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+  AlertsBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-alerts-backlog"
+      AlarmDescription: "Price changes waiting > 10 min for the Alerts service (SLO: alerts within 10 min). Runbook: docs/runbooks.md#backlog"
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions: [{ Name: QueueName, Value: !GetAtt PriceQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 600
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+  ThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-dynamodb-throttling"
+      AlarmDescription: "DynamoDB throttled requests for 5 min. Runbook: docs/runbooks.md#throttling"
+      Metrics:
+        - Id: total
+          Expression: "r + w"
+          Label: ThrottledRequests
+        - Id: r
+          ReturnData: false
+          MetricStat:
+            Metric: { Namespace: AWS/DynamoDB, MetricName: ReadThrottleEvents, Dimensions: [{ Name: TableName, Value: !Ref Table }] }
+            Period: 60
+            Stat: Sum
+        - Id: w
+          ReturnData: false
+          MetricStat:
+            Metric: { Namespace: AWS/DynamoDB, MetricName: WriteThrottleEvents, Dimensions: [{ Name: TableName, Value: !Ref Table }] }
+            Period: 60
+            Stat: Sum
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 5
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+  # ---------------------------------------------------------------- authentication
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "agriprice-${Env}"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: "OFF"
+      Policies:
+        PasswordPolicy: { MinimumLength: 10, RequireLowercase: true, RequireNumbers: true, RequireUppercase: true, RequireSymbols: false }
+      AdminCreateUserConfig: { AllowAdminCreateUserOnly: false }
+      Schema:
+        - { Name: email, Required: true, Mutable: true, AttributeDataType: String }
+        - { Name: phone_number, Required: true, Mutable: true, AttributeDataType: String }
+      AccountRecoverySetting: { RecoveryMechanisms: [{ Name: verified_email, Priority: 1 }] }
+  BuyersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: buyers, Description: Buyers and aggregators }
+  OfficersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: officers, Description: Extension officers and cooperatives }
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: { UserPoolId: !Ref UserPool, GroupName: admins, Description: Platform administrators }
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties: { UserPoolId: !Ref UserPool, Domain: !Sub "agriprice-${Env}-${AWS::AccountId}" }
+
+  # ---------------------------------------------------------------- audit
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    Condition: MakeTrail
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "agriprice-${Env}-trail-${AWS::AccountId}"
+      BucketEncryption: { ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }] }
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration: { Rules: [{ Id: expire, Status: Enabled, ExpirationInDays: 365 }] }
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: MakeTrail
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AclCheck
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition: { StringEquals: { aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/agriprice-${Env}" } }
+          - Sid: Write
+            Effect: Allow
+            Principal: { Service: cloudtrail.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub "${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/agriprice-${Env}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt TrailBucket.Arn, !Sub "${TrailBucket.Arn}/*"]
+            Condition: { Bool: { aws:SecureTransport: "false" } }
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    Condition: MakeTrail
+    DependsOn: TrailBucketPolicy
+    Properties:
+      TrailName: !Sub "agriprice-${Env}"
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+
+  # ---------------------------------------------------------------- API Gateway access-logging role (account level)
+  ApiGwLogRole:
+    Type: AWS::IAM::Role
+    Condition: MakeApiGwAccount
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: apigateway.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [!Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"]
+  ApiGwAccount:
+    Type: AWS::ApiGateway::Account
+    Condition: MakeApiGwAccount
+    Properties: { CloudWatchRoleArn: !GetAtt ApiGwLogRole.Arn }
+
+Outputs:
+  TableName:
+    Value: !Ref Table
+    Export: { Name: !Sub "agriprice-${Env}-TableName" }
+  TableArn:
+    Value: !GetAtt Table.Arn
+    Export: { Name: !Sub "agriprice-${Env}-TableArn" }
+  IdempotencyTableName:
+    Value: !Ref IdempotencyTable
+    Export: { Name: !Sub "agriprice-${Env}-IdempotencyTableName" }
+  IdempotencyTableArn:
+    Value: !GetAtt IdempotencyTable.Arn
+    Export: { Name: !Sub "agriprice-${Env}-IdempotencyTableArn" }
+  LakeBucketName:
+    Value: !Ref LakeBucket
+    Export: { Name: !Sub "agriprice-${Env}-LakeBucket" }
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+    Export: { Name: !Sub "agriprice-${Env}-GlueDatabase" }
+  AthenaWorkGroupName:
+    Value: !Ref AthenaWorkGroup
+    Export: { Name: !Sub "agriprice-${Env}-AthenaWorkGroup" }
+  PriceQueueUrl:
+    Value: !Ref PriceQueue
+    Export: { Name: !Sub "agriprice-${Env}-PriceQueueUrl" }
+  PriceQueueArn:
+    Value: !GetAtt PriceQueue.Arn
+    Export: { Name: !Sub "agriprice-${Env}-PriceQueueArn" }
+  PriceQueueName:
+    Value: !GetAtt PriceQueue.QueueName
+    Export: { Name: !Sub "agriprice-${Env}-PriceQueueName" }
+  MatchQueueArn:
+    Value: !GetAtt MatchQueue.Arn
+    Export: { Name: !Sub "agriprice-${Env}-MatchQueueArn" }
+  MatchQueueName:
+    Value: !GetAtt MatchQueue.QueueName
+    Export: { Name: !Sub "agriprice-${Env}-MatchQueueName" }
+  IngestionDlqArn:
+    Value: !GetAtt IngestionDlq.Arn
+    Export: { Name: !Sub "agriprice-${Env}-IngestionDlqArn" }
+  EventBusName:
+    Value: !Ref EventBus
+    Export: { Name: !Sub "agriprice-${Env}-EventBusName" }
+  EventBusArn:
+    Value: !GetAtt EventBus.Arn
+    Export: { Name: !Sub "agriprice-${Env}-EventBusArn" }
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic
+    Export: { Name: !Sub "agriprice-${Env}-AlarmTopicArn" }
+  UserPoolId:
+    Value: !Ref UserPool
+    Export: { Name: !Sub "agriprice-${Env}-UserPoolId" }
+  UserPoolArn:
+    Value: !GetAtt UserPool.Arn
+    Export: { Name: !Sub "agriprice-${Env}-UserPoolArn" }
+  UserPoolDomain:
+    Value: !Sub "agriprice-${Env}-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+    Export: { Name: !Sub "agriprice-${Env}-UserPoolDomain" }

@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AgriPrice Zambia - Service 2, Farmer & Listings API (independently deployable stack)
+
+Parameters:
+  Env: { Type: String, AllowedValues: [dev, prod] }
+  DeploymentType: { Type: String, Default: AllAtOnce }
+  ChaosErrorRate: { Type: String, Default: "0" }
+  LogRetentionDays: { Type: Number, Default: 14 }
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Tracing: Active
+    Timeout: 10
+    MemorySize: 512
+    Layers: [!Ref SharedLayer]
+    VpcConfig:
+      SubnetIds: !Split [",", !ImportValue { "Fn::Sub": "agriprice-${Env}-PrivateSubnetIds" }]
+      SecurityGroupIds: [!ImportValue { "Fn::Sub": "agriprice-${Env}-LambdaSgId" }]
+    Environment:
+      Variables:
+        APP_ENV: !Ref Env
+        TABLE_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableName" }
+        PARAM_PREFIX: !Sub "/agriprice/${Env}"
+        POWERTOOLS_METRICS_NAMESPACE: AgriPrice
+        POWERTOOLS_LOG_LEVEL: INFO
+        POWERTOOLS_LOGGER_SAMPLE_RATE: "0.01"
+    Tags: { service: listings-api, project: agriprice }
+
+Resources:
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "agriprice-${Env}-listings-shared"
+      ContentUri: ../../shared
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+    Metadata: { BuildMethod: python3.12, BuildArchitecture: arm64 }
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/lambda/agriprice-${Env}-listings-api", RetentionInDays: !Ref LogRetentionDays }
+  AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/aws/apigateway/agriprice-${Env}-listings", RetentionInDays: !Ref LogRetentionDays }
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "agriprice-${Env}-listings"
+      StageName: live
+      EndpointConfiguration: { Type: REGIONAL }
+      TracingEnabled: true
+      MinimumCompressionSize: 1024  # gzip anything >= 1 KB; smaller payloads are cheaper uncompressed
+      MethodSettings:
+        - { ResourcePath: "/*", HttpMethod: "*", ThrottlingRateLimit: 50, ThrottlingBurstLimit: 100, MetricsEnabled: true }
+      AccessLogSetting:
+        DestinationArn: !GetAtt AccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","route":"$context.resourcePath","status":"$context.status","latency":"$context.responseLatency","integrationLatency":"$context.integrationLatency","bytes":"$context.responseLength","user":"$context.authorizer.claims.sub"}'
+      Auth:
+        DefaultAuthorizer: Cognito
+        Authorizers:
+          Cognito:
+            UserPoolArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-UserPoolArn" }
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "agriprice-${Env}-listings-api"
+      Description: Farmers, listings, demand, field prices and public price lookups
+      CodeUri: .
+      Handler: listings_app.handler
+      LoggingConfig: { LogGroup: !Ref LogGroup }
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: !Ref DeploymentType
+        Alarms: [!Ref ErrorsAlarm]
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: listings-api
+          EVENT_BUS_NAME: !ImportValue { "Fn::Sub": "agriprice-${Env}-EventBusName" }
+          IDEMPOTENCY_TABLE: !ImportValue { "Fn::Sub": "agriprice-${Env}-IdempotencyTableName" }
+          LAKE_BUCKET: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
+          CHAOS_ERROR_RATE: !Ref ChaosErrorRate
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: OwnKeysOnly
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:BatchGetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["FARMER#*", "PRICE#*", "SUPPLY#*", "DEMAND#*"]
+            - Sid: MyDemandIndex
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub
+                - "${TableArn}/index/GSI1"
+                - TableArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["OWNER#*"]
+            - Sid: IdempotencyRecords
+              Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-IdempotencyTableArn" }
+            - Sid: PublishDomainEvents
+              Effect: Allow
+              Action: events:PutEvents
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-EventBusArn" }
+            - Sid: FieldPriceInbox
+              Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub
+                - "arn:${AWS::Partition}:s3:::${Bucket}/inbox/field/*"
+                - Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
+            - Sid: PhonePseudonymKey
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/agriprice/${Env}/privacy/pepper"
+      Events:
+        Markets:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /api/markets, Method: GET, Auth: { Authorizer: NONE } }
+        Prices:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: /api/prices, Method: GET, Auth: { Authorizer: NONE } }
+        Authenticated:
+          Type: Api
+          Properties: { RestApiId: !Ref Api, Path: "/api/{proxy+}", Method: ANY }
+
+  ErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-listings-api-errors"
+      AlarmDescription: "Lambda errors; triggers automatic rollback during canary. Runbook: docs/runbooks.md#errors"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Sub "agriprice-${Env}-listings-api" }]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "agriprice-${Env}-listings-api-5xx"
+      AlarmDescription: "Listings API 5xx rate > 2% in 3 of 5 minutes. Runbook: docs/runbooks.md#errors"
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions: [{ Name: ApiName, Value: !Sub "agriprice-${Env}-listings" }, { Name: Stage, Value: live }]
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 0.02
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!ImportValue { "Fn::Sub": "agriprice-${Env}-AlarmTopicArn" }]
+
+Outputs:
+  ApiId:
+    Value: !Ref Api
+    Export: { Name: !Sub "agriprice-${Env}-ListingsApiId" }
+  ApiUrl:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/live"
+  FunctionName:
+    Value: !Ref Function
+    Export: { Name: !Sub "agriprice-${Env}-ListingsFunctionName" }

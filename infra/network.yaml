@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AgriPrice Zambia - network. VPC across two Availability Zones with private
+  subnets for every Lambda function, free S3/DynamoDB gateway endpoints, and a
+  self-healing fck-nat instance instead of managed NAT Gateways (~$66/month saved).
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, prod]
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  EnableNat:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Outbound internet for ingestion (price sources), SMS, SSM, SQS, EventBridge, X-Ray.
+  FckNatAmiId:
+    Type: String
+    Default: ""
+    Description: fck-nat arm64 AMI for this Region (resolved automatically by scripts/deploy.py).
+  NatInstanceType:
+    Type: String
+    Default: t4g.nano
+
+Conditions:
+  UseNat: !And [!Equals [!Ref EnableNat, "true"], !Not [!Equals [!Ref FckNatAmiId, ""]]]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}" }]
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw }
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 8]]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-public-a" }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 4, 8]]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-public-b" }]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 8]]
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-private-a" }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 4, 8]]
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-private-b" }]
+
+  PublicRt:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc }
+  PublicDefault:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties: { RouteTableId: !Ref PublicRt, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Igw }
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetA, RouteTableId: !Ref PublicRt }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnetB, RouteTableId: !Ref PublicRt }
+
+  PrivateRtA:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-private-a" }] }
+  PrivateRtB:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc, Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-private-b" }] }
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRtA }
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRtB }
+
+  # Free gateway endpoints: S3 and DynamoDB traffic never touches the NAT.
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRtA, !Ref PrivateRtB]
+  DynamoEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.dynamodb"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRtA, !Ref PrivateRtB]
+
+  LambdaSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda functions - no inbound, HTTPS outbound only
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: "HTTPS to AWS APIs, price sources and SMS gateway" }
+
+  # ---------------- fck-nat (https://fck-nat.dev): one t4g.nano in an Auto Scaling group.
+  # A static ENI carries the private route; if the instance dies the ASG replaces
+  # it and the new instance re-attaches the ENI, so routes never change.
+  NatSg:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseNat
+    Properties:
+      GroupDescription: fck-nat - accepts traffic from the VPC only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: "-1", CidrIp: !Ref VpcCidr, Description: NAT traffic from private subnets }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: Internet egress }
+  NatEni:
+    Type: AWS::EC2::NetworkInterface
+    Condition: UseNat
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      GroupSet: [!Ref NatSg]
+      SourceDestCheck: false
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-fck-nat" }]
+  NatRole:
+    Type: AWS::IAM::Role
+    Condition: UseNat
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: attach-static-eni
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ec2:AttachNetworkInterface, ec2:ModifyNetworkInterfaceAttribute]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/${NatEni}"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+  NatProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: UseNat
+    Properties: { Roles: [!Ref NatRole] }
+  NatLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Condition: UseNat
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref FckNatAmiId
+        InstanceType: !Ref NatInstanceType
+        IamInstanceProfile: { Arn: !GetAtt NatProfile.Arn }
+        MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups: [!Ref NatSg]
+            SubnetId: !Ref PublicSubnetA
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: { VolumeSize: 8, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "eni_id=${NatEni}" >> /etc/fck-nat.conf
+            service fck-nat restart
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-fck-nat" }]
+  NatAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Condition: UseNat
+    Properties:
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      VPCZoneIdentifier: [!Ref PublicSubnetA]
+      LaunchTemplate: { LaunchTemplateId: !Ref NatLaunchTemplate, Version: !GetAtt NatLaunchTemplate.LatestVersionNumber }
+      HealthCheckType: EC2
+  PrivateDefaultA:
+    Type: AWS::EC2::Route
+    Condition: UseNat
+    Properties: { RouteTableId: !Ref PrivateRtA, DestinationCidrBlock: 0.0.0.0/0, NetworkInterfaceId: !Ref NatEni }
+  PrivateDefaultB:
+    Type: AWS::EC2::Route
+    Condition: UseNat
+    Properties: { RouteTableId: !Ref PrivateRtB, DestinationCidrBlock: 0.0.0.0/0, NetworkInterfaceId: !Ref NatEni }
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub "agriprice-${Env}-VpcId" }
+  PrivateSubnetIds:
+    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+    Export: { Name: !Sub "agriprice-${Env}-PrivateSubnetIds" }
+  LambdaSgId:
+    Value: !Ref LambdaSg
+    Export: { Name: !Sub "agriprice-${Env}-LambdaSgId" }
+  NatEnabled:
+    Value: !If [UseNat, "true", "false"]
