@@ -4,10 +4,10 @@ This file is the single place where roles are recorded. **To change a role, edit
 
 | GitHub | Name | Role | Owns (paths) | Thesis section |
 |---|---|---|---|---|
-| @Jieger2 | Aaron Zulu | Team Lead & Cloud Architect | `infra/network.yaml`, `infra/data.yaml`, `services/matching/`, `docs/architecture.md` | 5, 6, 13 |
-| @Benaiah09 | _(add name)_ | DevOps & Security Engineer | `.github/`, `infra/bootstrap.yaml`, `scripts/deploy.py`, `docs/security.md` | 7, 8 |
+| @Jieger2 | Idan Musama Mwaba | Team Lead & Cloud Architect | `infra/network.yaml`, `infra/data.yaml`, `services/matching/`, `docs/architecture.md` | 5, 6, 13 |
+| @Benaiah09 | Benaiah Masase | DevOps & Security Engineer | `.github/`, `infra/bootstrap.yaml`, `scripts/deploy.py`, `docs/security.md` | 7, 8 |
 | @victorwilliamkangomu-bot | Victor William Kangomu _(confirm)_ | Observability & Reliability Engineer | `infra/observability.yaml`, `infra/budget.yaml`, `docs/slo.md`, `docs/runbooks.md`, `tests/smoke/` | 9 |
-| @Jedyn128 | _(add name)_ | Backend API Engineer | `services/listings_api/`, `services/alerts/`, `shared/` | 4, 5.2–5.4 |
+| @Jedyn128 | Jeriah Chikwanda | Backend API Engineer | `services/listings_api/`, `services/alerts/`, `shared/` | 4, 5.2–5.4 |
 | @oliverkakungu | Oliver Kakungu | Data & Analytics Engineer | `services/ingestion/`, `services/analytics_api/`, `data/`, `scripts/make_sample_data.py`, `docs/cost.md` | 5.5, 5.8, 10 |
 | @Mwewacs | Mwewa Chibu | Frontend, USSD & QA Engineer | `services/ussd_gateway/`, `web/`, `load/`, `tests/unit/`, `docs/demo-script.md`, `docs/i18n-review.md` | 5.6, 5.7, 11 |
 
