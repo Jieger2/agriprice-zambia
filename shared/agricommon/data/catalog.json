@@ -1,0 +1,23 @@
+{
+  "provinces": [
+    {"code": "CEN", "name": "Central", "aliases": ["central"]},
+    {"code": "CB", "name": "Copperbelt", "aliases": ["copperbelt"]},
+    {"code": "EAS", "name": "Eastern", "aliases": ["eastern"]},
+    {"code": "LUA", "name": "Luapula", "aliases": ["luapula"]},
+    {"code": "LSK", "name": "Lusaka", "aliases": ["lusaka"]},
+    {"code": "MUC", "name": "Muchinga", "aliases": ["muchinga"]},
+    {"code": "NW", "name": "N-Western", "aliases": ["north-western", "north western", "northwestern"]},
+    {"code": "NOR", "name": "Northern", "aliases": ["northern"]},
+    {"code": "SOU", "name": "Southern", "aliases": ["southern"]},
+    {"code": "WES", "name": "Western", "aliases": ["western"]}
+  ],
+  "commodities": [
+    {"code": "MZE", "name": "Maize", "short": "Maize", "match": ["maize (white)", "maize"]},
+    {"code": "SOY", "name": "Soya beans", "short": "Soya", "match": ["soybeans", "soya", "soybean"]},
+    {"code": "GNT", "name": "Groundnuts", "short": "G/nuts", "match": ["groundnuts", "groundnut", "peanut"]},
+    {"code": "BNS", "name": "Beans", "short": "Beans", "match": ["beans"]},
+    {"code": "RCE", "name": "Rice", "short": "Rice", "match": ["rice"]},
+    {"code": "CAS", "name": "Cassava", "short": "Cassava", "match": ["cassava"]},
+    {"code": "MML", "name": "Mealie meal", "short": "Mealie", "match": ["maize meal", "mealie meal"]}
+  ]
+}
