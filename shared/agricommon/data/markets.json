@@ -1,0 +1,22 @@
+[
+  {"code": "LSK", "name": "Lusaka", "province": "LSK", "lat": -15.4167, "lon": 28.2833},
+  {"code": "NDL", "name": "Ndola", "province": "CB", "lat": -12.9587, "lon": 28.6366},
+  {"code": "KTW", "name": "Kitwe", "province": "CB", "lat": -12.8024, "lon": 28.2132},
+  {"code": "CHG", "name": "Chingola", "province": "CB", "lat": -12.5289, "lon": 27.8536},
+  {"code": "KBW", "name": "Kabwe", "province": "CEN", "lat": -14.4469, "lon": 28.4464},
+  {"code": "KPM", "name": "Kapiri Mposhi", "province": "CEN", "lat": -13.9709, "lon": 28.6693},
+  {"code": "MKS", "name": "Mkushi", "province": "CEN", "lat": -13.6203, "lon": 29.3939},
+  {"code": "SRJ", "name": "Serenje", "province": "CEN", "lat": -13.2325, "lon": 30.2352},
+  {"code": "CPT", "name": "Chipata", "province": "EAS", "lat": -13.6333, "lon": 32.65},
+  {"code": "PTK", "name": "Petauke", "province": "EAS", "lat": -14.2426, "lon": 31.3253},
+  {"code": "KSM", "name": "Kasama", "province": "NOR", "lat": -10.2129, "lon": 31.1808},
+  {"code": "MPK", "name": "Mpika", "province": "MUC", "lat": -11.8343, "lon": 31.4529},
+  {"code": "CNS", "name": "Chinsali", "province": "MUC", "lat": -10.5414, "lon": 32.0816},
+  {"code": "MNS", "name": "Mansa", "province": "LUA", "lat": -11.1998, "lon": 28.8943},
+  {"code": "SLW", "name": "Solwezi", "province": "NW", "lat": -12.1688, "lon": 26.3894},
+  {"code": "MNG", "name": "Mongu", "province": "WES", "lat": -15.2546, "lon": 23.1274},
+  {"code": "CHM", "name": "Choma", "province": "SOU", "lat": -16.8065, "lon": 26.9531},
+  {"code": "LVS", "name": "Livingstone", "province": "SOU", "lat": -17.8419, "lon": 25.8543},
+  {"code": "MZB", "name": "Mazabuka", "province": "SOU", "lat": -15.856, "lon": 27.748},
+  {"code": "MNZ", "name": "Monze", "province": "SOU", "lat": -16.2803, "lon": 27.4782}
+]
