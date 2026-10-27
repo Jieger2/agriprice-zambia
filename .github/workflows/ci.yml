@@ -1,0 +1,107 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install ruff cfn-lint
+      - name: Python lint
+        run: ruff check .
+      - name: CloudFormation lint
+        run: cfn-lint infra/*.yaml services/*/template.yaml --ignore-checks W2506
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: gitleaks (full history)
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --config .gitleaks.toml --redact --verbose --exit-code 1 .
+
+  iac-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install checkov
+      - name: Checkov (fails on any finding not justified in .checkov.yaml)
+        run: checkov -d infra -d services --config-file .checkov.yaml
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip, cache-dependency-path: requirements-dev.txt }
+      - run: pip install -r requirements-dev.txt
+      - name: Tests with coverage gate (>= 60%)
+        run: pytest --cov --cov-report=term --cov-report=xml --cov-fail-under=60
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: coverage.xml }
+
+  deploy-dev:
+    needs: [lint, secret-scan, iac-security, unit-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { id-token: write, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - uses: aws-actions/setup-sam@v2
+        with: { use-installer: true }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'af-south-1' }}
+      - run: pip install boto3 requests pytest
+      - name: Deploy all stacks (dev)
+        env: { WFP_CSV_URL: "${{ vars.WFP_CSV_URL }}" }
+        run: python scripts/deploy.py deploy --env dev
+      - name: Smoke tests
+        run: pytest tests/smoke -q --env dev
+
+  deploy-prod:
+    needs: [deploy-dev]
+    runs-on: ubuntu-latest
+    environment: production   # add required reviewers in GitHub settings for a manual gate
+    permissions: { id-token: write, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - uses: aws-actions/setup-sam@v2
+        with: { use-installer: true }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'af-south-1' }}
+      - run: pip install boto3 requests pytest
+      - name: Deploy all stacks (prod, 10% canary with alarm-based automatic rollback)
+        env: { WFP_CSV_URL: "${{ vars.WFP_CSV_URL }}" }
+        run: python scripts/deploy.py deploy --env prod
+      - name: Smoke tests
+        run: pytest tests/smoke -q --env prod
