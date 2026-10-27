@@ -10,12 +10,14 @@ The brief requires a meaningful commit history from **every** team member. Work 
 
 ## Ownership
 
-| Area | Paths | Owner |
-|---|---|---|
-| Team lead & cloud architect | `infra/`, `services/matching/`, `docs/architecture.md` | Aaron Zulu |
-| DevOps & security | `.github/`, `infra/bootstrap.yaml`, `scripts/deploy.py`, `docs/security.md`, `docs/runbooks.md` | _TBD_ |
-| Backend & data | `services/ingestion/`, `services/analytics_api/`, `services/listings_api/`, `shared/` | _TBD_ |
-| Frontend, USSD & QA | `services/ussd_gateway/`, `web/`, `load/`, `tests/` | _TBD_ |
+Roles and owned paths are listed in **`TEAM.md`** (the single editable roster). `.github/CODEOWNERS` requests reviews from the owner automatically.
+
+## First-time setup for each member
+
+1. Accept the repository invitation (the owner adds you under Settings → Collaborators with the **Write** role).
+2. `git clone https://github.com/Jieger2/agriprice-zambia.git`
+3. `git config user.name "Your Name"` and `git config user.email "<email on your GitHub account>"`, so your commits count towards your history.
+4. Make your first change to one of your own paths, for example adding your name to `TEAM.md`, and open a pull request.
 
 ## Local checks before pushing
 ```bash
