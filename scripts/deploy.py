@@ -12,7 +12,7 @@ Usage:
   python scripts/deploy.py destroy --env dev
 
 Environment variables (optional):
-  AWS_REGION       default af-south-1
+  AWS_REGION       default eu-north-1
   AT_USERNAME      Africa's Talking username (default "sandbox")
   AT_API_KEY       Africa's Talking API key (sandbox or live)
   SMS_MODE         log | sandbox | live (default: sandbox if AT_API_KEY is stored, else log)
@@ -37,7 +37,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[1]
-REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "af-south-1"
+REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "eu-north-1"
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "agrizambia5@gmail.com")
 FCK_NAT_OWNER = "568608671756"
 SERVICES = ["ussd_gateway", "listings_api", "ingestion", "matching", "alerts", "analytics_api"]

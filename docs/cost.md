@@ -1,6 +1,6 @@
 # Cost
 
-The estimates use published on-demand prices from the thesis (us-east-1, October 2026). af-south-1 is somewhat dearer. **Replace them with Cost Explorer actuals** (group by Service, then by tag `stack`) once the system runs.
+The estimates use published on-demand prices from the thesis (us-east-1, October 2026). eu-north-1 (Stockholm, the deployment Region) is priced close to us-east-1; af-south-1 would be dearer. **Replace them with Cost Explorer actuals** (group by Service, then by tag `stack`) once the system runs.
 
 ## Pilot (500 farmers, ~60 k API requests/month)
 

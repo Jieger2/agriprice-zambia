@@ -30,7 +30,7 @@ def sqs_record(body: dict, mid="m1", cid="corr-1"):
     return {
         "messageId": mid, "receiptHandle": "rh", "body": json.dumps(body), "attributes": {}, "md5OfBody": "",
         "messageAttributes": {"correlation_id": {"stringValue": cid, "dataType": "String"}},
-        "eventSource": "aws:sqs", "eventSourceARN": "arn:aws:sqs:af-south-1:123456789012:q", "awsRegion": "af-south-1",
+        "eventSource": "aws:sqs", "eventSourceARN": "arn:aws:sqs:eu-north-1:123456789012:q", "awsRegion": "eu-north-1",
     }
 
 

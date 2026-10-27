@@ -51,6 +51,10 @@ s3://agriprice-<env>-lake-<acct>/
 
 The `raw_prices` table uses partition projection, so no crawler is needed. `curated_prices` partitions are registered automatically by `INSERT INTO`. The Athena workgroup enforces a 1 GB scan limit per query.
 
+## Region
+
+The system deploys to **eu-north-1 (Stockholm)**. The thesis preferred af-south-1 (Cape Town) for latency, but that Region needs an account opt-in, and eu-north-1 is enabled by default with prices close to us-east-1. A Zambia–Stockholm round trip of roughly 200–250 ms still fits the USSD latency SLO, which allows 1,000 ms server-side and seconds of operator timeout. The farmer-facing web traffic is served from CloudFront edge locations in Africa (PriceClass_200). The Region is a single deploy-time setting (`AWS_REGION`), so moving to Cape Town later needs no code changes.
+
 ## Network
 
 - A VPC across two AZs, with two private subnets (Lambda) and two public subnets (NAT only).
