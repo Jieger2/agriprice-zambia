@@ -97,14 +97,14 @@ def test_gsm7_and_fit():
 @pytest.mark.parametrize("lang", i18n.LANGS)
 def test_every_menu_string_fits_ussd(lang):
     for key in i18n.STRINGS["en"]:
-        rendered = i18n.t(key, lang, **{k: "Kapiri Mposhi" for k in ("crop", "market", "code", "phone", "price", "chg", "target", "date", "rows", "qty", "amt", "n", "km")})
+        rendered = i18n.t(key, lang, **{k: "Kapiri Mposhi" for k in ("crop", "market", "code", "phone", "price", "chg", "target", "date", "rows", "qty", "amt", "n", "km", "unit", "when", "dir", "name")})
         assert text.is_gsm7(text.to_gsm7(rendered))
         if not key.startswith("sms_"):
             assert len("CON " + rendered) <= text.USSD_MAX, key
 
 
 def test_i18n_fallback():
-    assert i18n.t("qty", "bem", crop="Maize").startswith("Quantity")
+    assert i18n.t("qty", "bem", crop="Maize", unit="kg").startswith("How many")
     assert i18n.t("main", "zz") == i18n.t("main", "en")
 
 
