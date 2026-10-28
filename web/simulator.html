@@ -17,6 +17,9 @@
   .input{display:flex;gap:6px;margin:12px 0 10px}
   .input input{flex:1;font:16px monospace;padding:6px;border-radius:6px;border:0}
   .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+  .keys button small{display:block;font:500 9px system-ui;opacity:.7;letter-spacing:.08em}
+  .mode{display:flex;justify-content:space-between;align-items:center;color:#cfd8cf;font:12px system-ui;margin:-4px 0 8px}
+  .mode button{font:600 12px system-ui;padding:3px 10px;border-radius:999px;border:0;background:#6a8f6d;color:#fff;cursor:pointer}
   .keys button,.ctl button{font:600 16px system-ui;padding:9px 0;border-radius:10px;border:0;background:#454c46;color:#eee;cursor:pointer}
   .ctl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:8px}
   .ctl .call{background:#2e7d32}.ctl .end{background:#b23a2a}
@@ -35,8 +38,9 @@
 <main>
   <div class="phone">
     <div class="screen" id="screen">Press the green button to dial *384*1#</div>
-    <form class="input" id="send"><input id="entry" inputmode="numeric" autocomplete="off" aria-label="Reply"><button>OK</button></form>
+    <form class="input" id="send"><input id="entry" inputmode="numeric" autocomplete="off" aria-label="Reply" maxlength="40"><button>OK</button></form>
     <div class="ctl"><button class="call" id="dial" type="button">Dial *384*1#</button><button class="end" id="hang" type="button">End</button></div>
+    <div class="mode"><span id="mode-tip">Keypad: numbers</span><button type="button" id="mode">ABC</button></div>
     <div class="keys" id="keys"></div>
   </div>
   <div class="side">
@@ -47,7 +51,7 @@
     <form id="sms-send" class="input" style="margin:0 0 .5rem"><input id="sms-text" placeholder="PRICE MAIZE" style="font:14px system-ui"><button>Send SMS</button></form>
     <div id="inbox"><p class="tip">No messages yet.</p></div>
     <h2>Try this</h2>
-    <p class="tip">1. Dial, choose <code>5</code> to register (province, market, name).<br>2. Dial again, <code>1</code> then <code>1</code> for maize prices.<br>3. <code>2</code> to sell: crop, unit, quantity, date, confirm. Buyers with matching demand get an SMS, and so do you.<br>4. <code>3</code> to set an alert; an admin can trigger it with <b>Run ingestion now</b> after adding a field price.</p>
+    <p class="tip">1. Dial, choose <code>5</code> to register (province, market, name). At the name screen the keypad switches to <b>ABC</b>: type on your keyboard, or tap keys like a phone (2 = A, 22 = B, 0 = space).<br>2. Dial again, <code>1</code> then <code>1</code> for maize prices.<br>3. <code>2</code> to sell: crop, unit, quantity, date, confirm. Buyers with matching demand get an SMS, and so do you.<br>4. <code>3</code> to set an alert; an admin can trigger it with <b>Run ingestion now</b> after adding a field price.</p>
   </div>
 </main>
 <script>
@@ -63,14 +67,38 @@
     const kind = text.slice(0, 3), msg = text.slice(4);
     screen.innerHTML = esc(msg) + `<div class="meta">${kind} · ${text.length}/182 chars</div>`;
     if (kind === 'END') { session = null; inputs = []; }
+    setMode(kind === 'CON' && /name/i.test(msg));
     $('#entry').focus();
     setTimeout(loadInbox, 600);
   }
   $('#dial').onclick = () => { session = 'sim-' + Date.now(); inputs = []; ussd(); };
   $('#hang').onclick = () => { session = null; inputs = []; screen.textContent = 'Call ended. Dial again within 3 minutes to resume where you left off.'; };
-  $('#send').onsubmit = (e) => { e.preventDefault(); const v = $('#entry').value.trim(); if (!session || !v) return; inputs.push(v); $('#entry').value = ''; ussd(); };
+  $('#send').onsubmit = (e) => { e.preventDefault(); const v = $('#entry').value.replace(/\*/g, '').trim(); if (!session || !v) return; inputs.push(v); $('#entry').value = ''; ussd(); };
+  // Keypad works like a real handset: 123 mode types digits; ABC mode is multi-tap (press 2 twice = B).
+  const LETTERS = { '1': "'-", '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO', '7': 'PQRS', '8': 'TUV', '9': 'WXYZ', '0': ' ' };
+  let abc = false, lastKey = null, lastAt = 0, tapIndex = 0;
   const keys = $('#keys');
-  ['1','2','3','4','5','6','7','8','9','*','0','#'].forEach((k) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = k; b.onclick = () => { $('#entry').value += k; }; keys.appendChild(b); });
+  function setMode(on) {
+    abc = on; lastKey = null;
+    $('#mode').textContent = on ? '123' : 'ABC';
+    $('#mode-tip').textContent = on ? 'Keypad: letters (tap a key repeatedly, 0 = space)' : 'Keypad: numbers';
+    $('#entry').setAttribute('inputmode', on ? 'text' : 'numeric');
+    keys.querySelectorAll('button').forEach((b) => { b.querySelector('small').hidden = !on; });
+  }
+  ['1','2','3','4','5','6','7','8','9','*','0','#'].forEach((k) => {
+    const b = document.createElement('button'); b.type = 'button';
+    b.innerHTML = `${k}<small hidden>${LETTERS[k] === ' ' ? 'space' : (LETTERS[k] || '&nbsp;')}</small>`;
+    b.onclick = () => {
+      const entry = $('#entry'), now = Date.now();
+      if (!abc || !LETTERS[k]) { entry.value += k; lastKey = null; return; }
+      const set = LETTERS[k];
+      if (k === lastKey && now - lastAt < 900) { tapIndex = (tapIndex + 1) % set.length; entry.value = entry.value.slice(0, -1) + set[tapIndex]; }
+      else { tapIndex = 0; entry.value += set[0]; }
+      lastKey = k; lastAt = now;
+    };
+    keys.appendChild(b);
+  });
+  $('#mode').onclick = () => setMode(!abc);
   $('#sms-send').onsubmit = async (e) => {
     e.preventDefault();
     await fetch('/sms', { method: 'POST', body: new URLSearchParams({ from: $('#phone').value, to: '384', text: $('#sms-text').value }) });
