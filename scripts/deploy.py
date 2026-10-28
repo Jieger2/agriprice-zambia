@@ -238,7 +238,10 @@ def show_outputs(env: str) -> dict:
     out_file.write_text(json.dumps(info, indent=2))
     log(f"outputs written to {out_file.name} (git-ignored: it contains the callback token)")
     for k, v in info.items():
-        print(f"  {k:15} {v if k not in ('ussd_callback', 'sms_callback') else (v or '').split('?')[0] + '?k=***'}")
+        shown = v if k not in ("ussd_callback", "sms_callback") or not v else v.split("?")[0] + "?k=***"
+        print(f"  {k:15} {shown or 'not deployed'}")
+    if not info["web_app"]:
+        log(f"Nothing is deployed in {REGION} for env '{env}' yet: run  python scripts/deploy.py deploy --env {env}  and wait for it to finish.")
     return info
 
 
