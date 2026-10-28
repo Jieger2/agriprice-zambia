@@ -74,6 +74,8 @@ python scripts/deploy.py outputs --env dev    # web URL, USSD callback URL, dash
 python scripts/deploy.py add-user --env dev --email you@example.com --role admins   # first administrator
 ```
 
+**Accounts from AWS's new sign-up experience** (Sept 2026 onwards) carry AWS-managed service control policies that block IAM OpenID Connect. `bootstrap` detects this, skips the GitHub Actions deploy role and continues; deploy from a laptop with `deploy.py`. To restore GitHub deployments, activate advanced features in AWS Settings (irreversible; requires the Paid Plan).
+
 Each stack is deployed in dependency order, and a marker can do the same in a clean account from this repository. To redeploy one service only: `python scripts/deploy.py deploy --env dev --only matching`.
 
 ### Continuous delivery

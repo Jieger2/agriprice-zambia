@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: AgriPrice Zambia - monthly cost budget with email alerts (deployed to us-east-1; AWS Budgets is global)
+Description: AgriPrice Zambia - monthly cost budget with email alerts (AWS Budgets is global; the stack can live in any Region)
 
 Parameters:
   MonthlyLimitUsd: { Type: Number, Default: 20 }

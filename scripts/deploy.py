@@ -263,16 +263,30 @@ def bootstrap() -> None:
     if not exe_ok:
         sys.exit("Install AWS SAM CLI first.")
     iam = boto3.client("iam")
-    has_oidc = any(p["Arn"].endswith("token.actions.githubusercontent.com") for p in iam.list_open_id_connect_providers()["OpenIDConnectProviderList"])
+    github = True
+    try:
+        has_oidc = any(p["Arn"].endswith("token.actions.githubusercontent.com") for p in iam.list_open_id_connect_providers()["OpenIDConnectProviderList"])
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] not in ("AccessDenied", "AccessDeniedException"):
+            raise
+        github, has_oidc = False, False
+        log("NOTE: this account blocks IAM OpenID Connect (AWS-managed service control policy).")
+        log("      Skipping the GitHub Actions deploy role: deploy from this laptop with deploy.py instead.")
     subprocess.run([exe_ok, "deploy", "--template-file", "infra/bootstrap.yaml", "--stack-name", "agriprice-bootstrap", "--region", region,
                     "--capabilities", "CAPABILITY_NAMED_IAM", "--no-fail-on-empty-changeset",
-                    "--parameter-overrides", f"CreateOidcProvider={'false' if has_oidc else 'true'}"], check=True, cwd=ROOT)
-    subprocess.run([exe_ok, "deploy", "--template-file", "infra/budget.yaml", "--stack-name", "agriprice-budget", "--region", "us-east-1",
-                    "--no-fail-on-empty-changeset", "--parameter-overrides", f"AlertEmail={ALERT_EMAIL}"], check=True, cwd=ROOT)
+                    "--parameter-overrides", f"CreateOidcProvider={'false' if has_oidc else 'true'}", f"CreateGitHubRole={'true' if github else 'false'}"],
+                   check=True, cwd=ROOT)
+    # AWS Budgets is global, so the budget stack lives in the deployment Region (some accounts may only use one Region).
+    budget = subprocess.run([exe_ok, "deploy", "--template-file", "infra/budget.yaml", "--stack-name", "agriprice-budget", "--region", region,
+                             "--no-fail-on-empty-changeset", "--parameter-overrides", f"AlertEmail={ALERT_EMAIL}"], cwd=ROOT)
+    if budget.returncode != 0:
+        log("WARNING: the $20 budget could not be created here. Set a spend limit or budget in the AWS console instead; deployment can continue.")
     out = outputs("agriprice-bootstrap", region)
-    log("Bootstrap complete. Add this as a GitHub repository variable named AWS_DEPLOY_ROLE_ARN:")
-    print("  " + out["GitHubDeployRoleArn"])
-    log("Also add repository variable AWS_REGION = " + region)
+    log("Bootstrap complete. Next: python scripts/deploy.py deploy --env dev")
+    if out.get("GitHubDeployRoleArn"):
+        log("For GitHub deployments, add this as repository variable AWS_DEPLOY_ROLE_ARN:")
+        print("  " + out["GitHubDeployRoleArn"])
+        log("Also add repository variable AWS_REGION = " + region)
 
 
 def destroy(env: str) -> None:
