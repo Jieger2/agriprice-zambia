@@ -28,6 +28,12 @@
 | listings-api | events:PutEvents | event bus | `ListingCreated`, `DemandPosted` |
 | listings-api | s3:PutObject | `lake/inbox/field/*` | officer field price reports |
 | listings-api | ssm:GetParameter | `/privacy/pepper` | pseudonymise phone numbers |
+| listings-api | dynamodb on `MATCH#`, `CONFIG#` keys | table | buyer match list; admin catalog and sources (Admin group checked in code) |
+| listings-api | cognito-idp ListUsers, ListUsersInGroup, AdminCreateUser, AdminAdd/RemoveUserFromGroup, AdminListGroupsForUser | project user pool | Admin page: invite users and assign roles (FR10) |
+| listings-api | lambda:InvokeFunction | `agriprice-<env>-ingestion` (and aliases) | Admin "Run ingestion now" |
+| all services | dynamodb:GetItem on `CONFIG#*` | table | read admin-managed catalog |
+| ussd-gateway, matching, alerts | dynamodb:PutItem on `SMSOUT#*` | table | mock SMS outbox when no SMS provider is configured |
+| matching | dynamodb:PutItem on `MATCH#*` | table | record each matched pair once |
 | ingestion | dynamodb Get/Put/UpdateItem | table; `LeadingKeys` ∈ PRICE#, SOURCE# | current prices, watermarks |
 | ingestion | sqs:SendMessage | `price-normalised` | async path to Alerts |
 | ingestion | s3 List / Get/Put/Delete | lake bucket; prefixes seed, raw, inbox, processed, curated, athena-results | read sources, write raw zone, archive inbox; Athena `INSERT INTO` runs with this role, so it writes curated and athena-results |

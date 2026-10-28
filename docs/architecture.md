@@ -13,6 +13,25 @@
 
 Each service has its own template, IAM role, alarms, log group (14-day retention) and copy of the shared layer, so redeploying one never touches another. Shared resources live in the `network`, `data`, `web` and `observability` stacks and reach the services through CloudFormation exports.
 
+## Admin-managed configuration (FR10)
+
+Administrators change reference data without a deployment:
+- markets (add, edit or disable)
+- crops, including the source names that map to them
+- unit conversions, such as "Tin (5 L)" = 4.5 kg
+- price sources (add a WFP/HDX CSV link, or enable and disable a source)
+- user roles (Cognito groups)
+
+Catalog and source changes are stored as JSON documents in `CONFIG#catalog` and `CONFIG#sources`. Each service merges them over the bundled baseline and caches the result for 60 seconds, so a new market appears in USSD menus, matching and ingestion within a minute. If the store cannot be read, services fall back to the baseline.
+
+## Matches (FR5)
+
+The Matching service records each demand/listing pair once, with a conditional write to `MATCH#<demandId>`. Because of that write, a pair is notified exactly once even when `ListingCreated` and `DemandPosted` both find it, or SQS redelivers a message. Buyers see their matched sellers under *My demand*.
+
+## Forecasts and weather (FR12)
+
+The nightly refresh produces 3 monthly forecasts (Holt-Winters) and 4 weekly forecasts. The weekly forecasts are interpolated from the latest monthly value towards next month's forecast. During the November–April growing season, forecasts are adjusted by Open-Meteo's 16-day rainfall forecast against the monthly normal. The adjustment is capped at ±8% and documented as an illustrative heuristic in `shared/agricommon/weather.py`. `WEATHER_MODE` is `live` in AWS and `mock` locally.
+
 ## Asynchronous paths
 
 - **Ingestion → Alerts:** SQS `price-normalised`, batch 10, partial-batch failure reporting, DLQ after 3 attempts, alarm on message age above 10 minutes (the alert SLO).
@@ -32,6 +51,9 @@ Each service has its own template, IAM role, alarms, log group (14-day retention
 | Alert log | `ALERTLOG#<pid>#<crop>` | `<date>` | TTL 2 days |
 | USSD session / resume | `SESSION#<id>` / `RESUME#<pid>` | `STATE` / `LAST` | TTL 180 s: the stateless tier |
 | Analytics cache | `SERIES#<crop>#<province>` | `ALL` | rebuilt nightly |
+| Admin configuration | `CONFIG#catalog` / `CONFIG#sources` | `CURRENT` | JSON document |
+| Match | `MATCH#<demandId>` | supply SK | written once per pair; TTL 30 days |
+| Mock SMS outbox | `SMSOUT#<phone>` | timestamp | `SMS_MODE=outbox` only; TTL 7 days |
 | Watermark | `SOURCE#<id>` | `WATERMARK` | prevents re-ingesting rows |
 
 **Why DynamoDB rather than RDS/PostGIS:** every access pattern is a key lookup or a prefix query. It is Multi-AZ by default, scales to zero cost when idle, and its auto-scaling is easy to demonstrate. Multi-AZ RDS would cost two always-on instances.
