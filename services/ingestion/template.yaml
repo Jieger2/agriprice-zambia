@@ -28,6 +28,7 @@ Globals:
         PARAM_PREFIX: !Sub "/agriprice/${Env}"
         POWERTOOLS_METRICS_NAMESPACE: AgriPrice
         POWERTOOLS_LOG_LEVEL: INFO
+        CATALOG_DYNAMIC: "1"
     Tags: { service: ingestion, project: agriprice }
 
 Resources:
@@ -77,7 +78,7 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["PRICE#*", "SOURCE#*"]
+                  dynamodb:LeadingKeys: ["PRICE#*", "SOURCE#*", "CONFIG#*"]
             - Sid: PublishPriceChanges
               Effect: Allow
               Action: sqs:SendMessage

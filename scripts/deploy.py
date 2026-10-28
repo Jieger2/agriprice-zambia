@@ -15,7 +15,7 @@ Environment variables (optional):
   AWS_REGION       default eu-north-1
   AT_USERNAME      Africa's Talking username (default "sandbox")
   AT_API_KEY       Africa's Talking API key (sandbox or live)
-  SMS_MODE         log | sandbox | live (default: sandbox if AT_API_KEY is stored, else log)
+  SMS_MODE         log | outbox | sandbox | live (default: sandbox if AT_API_KEY is stored, else outbox)
   WFP_CSV_URL      HTTPS link to the WFP Zambia food-price CSV on HDX (adds a live source)
   ALERT_EMAIL      default agrizambia5@gmail.com
 """
@@ -164,7 +164,7 @@ def publish_web(env: str) -> None:
     s3 = boto3.client("s3", region_name=REGION)
     bucket = web["WebBucketName"]
     for f in (ROOT / "web").rglob("*"):
-        if f.is_file() and f.name != "config.js":
+        if f.is_file() and f.name not in ("config.js", "simulator.html"):  # the phone simulator is local-only
             key = f.relative_to(ROOT / "web").as_posix()
             ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
             if f.suffix == ".webmanifest":
@@ -182,7 +182,7 @@ def publish_web(env: str) -> None:
 def deploy(env: str, only: list[str] | None, sms_mode: str | None, chaos: str = "0", deployment_type: str | None = None) -> None:
     boot = bootstrap_outputs()
     has_key = ensure_secrets(env)
-    sms_mode = sms_mode or os.environ.get("SMS_MODE") or ("sandbox" if has_key else "log")
+    sms_mode = sms_mode or os.environ.get("SMS_MODE") or ("sandbox" if has_key else "outbox")
     dtype = deployment_type or ("Canary10Percent5Minutes" if env == "prod" else "AllAtOnce")
     parts = only or ORDER
     for part in ORDER:
@@ -295,7 +295,7 @@ def main() -> None:
     ap.add_argument("command", choices=["bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "demo-rollback", "destroy"])
     ap.add_argument("--env", default="dev", choices=["dev", "prod"])
     ap.add_argument("--only", help="comma-separated parts: " + ",".join(ORDER))
-    ap.add_argument("--sms-mode", choices=["log", "sandbox", "live"])
+    ap.add_argument("--sms-mode", choices=["log", "outbox", "sandbox", "live"])
     ap.add_argument("--rotate", action="store_true", help="secrets: regenerate pepper and callback token")
     ap.add_argument("--rate", default="0.5", help="demo-rollback: fraction of requests that fail")
     a = ap.parse_args()

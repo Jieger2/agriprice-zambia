@@ -4,7 +4,7 @@ Description: AgriPrice Zambia - Service 1, USSD/SMS Gateway (independently deplo
 
 Parameters:
   Env: { Type: String, AllowedValues: [dev, prod] }
-  SmsMode: { Type: String, AllowedValues: [log, sandbox, live], Default: sandbox }
+  SmsMode: { Type: String, AllowedValues: [log, outbox, sandbox, live], Default: sandbox }
   AllowedCidrs: { Type: String, Default: "", Description: Optional comma-separated CIDRs for Africa's Talking callbacks }
   DeploymentType: { Type: String, Default: AllAtOnce, Description: "prod uses Canary10Percent5Minutes" }
   ChaosErrorRate: { Type: String, Default: "0", Description: "ONLY for the rollback demonstration (0-1)" }
@@ -29,6 +29,7 @@ Globals:
         POWERTOOLS_METRICS_NAMESPACE: AgriPrice
         POWERTOOLS_LOG_LEVEL: INFO
         POWERTOOLS_LOGGER_SAMPLE_RATE: "0.01"
+        CATALOG_DYNAMIC: "1"
     Tags: { service: ussd-gateway, project: agriprice }
 
 Resources:
@@ -90,7 +91,7 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["FARMER#*", "SESSION#*", "RESUME#*", "PRICE#*", "SUPPLY#*", "ALERT#*"]
+                  dynamodb:LeadingKeys: ["FARMER#*", "SESSION#*", "RESUME#*", "PRICE#*", "SUPPLY#*", "ALERT#*", "CONFIG#*", "SMSOUT#*"]
             - Sid: PublishDomainEvents
               Effect: Allow
               Action: events:PutEvents

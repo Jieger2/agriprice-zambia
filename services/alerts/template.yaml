@@ -4,7 +4,7 @@ Description: AgriPrice Zambia - Service 5, price threshold Alerts (independently
 
 Parameters:
   Env: { Type: String, AllowedValues: [dev, prod] }
-  SmsMode: { Type: String, AllowedValues: [log, sandbox, live], Default: sandbox }
+  SmsMode: { Type: String, AllowedValues: [log, outbox, sandbox, live], Default: sandbox }
   DeploymentType: { Type: String, Default: AllAtOnce }
   LogRetentionDays: { Type: Number, Default: 14 }
 
@@ -51,6 +51,7 @@ Resources:
           POWERTOOLS_METRICS_NAMESPACE: AgriPrice
           POWERTOOLS_LOG_LEVEL: INFO
           SMS_MODE: !Ref SmsMode
+          CATALOG_DYNAMIC: "1"
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -67,7 +68,14 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["ALERTLOG#*"]
+                  dynamodb:LeadingKeys: ["ALERTLOG#*", "SMSOUT#*"]
+            - Sid: ReadAdminCatalog
+              Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["CONFIG#*"]
             - Sid: SmsGatewayCredentials
               Effect: Allow
               Action: ssm:GetParameter

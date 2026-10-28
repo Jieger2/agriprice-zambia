@@ -7,6 +7,7 @@ Parameters:
   DeploymentType: { Type: String, Default: AllAtOnce }
   ChaosErrorRate: { Type: String, Default: "0" }
   LogRetentionDays: { Type: Number, Default: 14 }
+  WeatherMode: { Type: String, AllowedValues: [live, mock, off], Default: live, Description: "Open-Meteo rainfall signal for forecasts (FR12)" }
 
 Resources:
   SharedLayer:
@@ -69,6 +70,8 @@ Resources:
           GLUE_DATABASE: !ImportValue { "Fn::Sub": "agriprice-${Env}-GlueDatabase" }
           ATHENA_WORKGROUP: !ImportValue { "Fn::Sub": "agriprice-${Env}-AthenaWorkGroup" }
           CHAOS_ERROR_RATE: !Ref ChaosErrorRate
+          WEATHER_MODE: !Ref WeatherMode
+          CATALOG_DYNAMIC: "1"
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -78,7 +81,7 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["SERIES#*"]
+                  dynamodb:LeadingKeys: ["SERIES#*", "CONFIG#*"]
             - Sid: RunAggregation
               Effect: Allow
               Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults, athena:StopQueryExecution]

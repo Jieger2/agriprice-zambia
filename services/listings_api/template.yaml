@@ -27,6 +27,7 @@ Globals:
         POWERTOOLS_METRICS_NAMESPACE: AgriPrice
         POWERTOOLS_LOG_LEVEL: INFO
         POWERTOOLS_LOGGER_SAMPLE_RATE: "0.01"
+        CATALOG_DYNAMIC: "1"
     Tags: { service: listings-api, project: agriprice }
 
 Resources:
@@ -85,6 +86,8 @@ Resources:
           IDEMPOTENCY_TABLE: !ImportValue { "Fn::Sub": "agriprice-${Env}-IdempotencyTableName" }
           LAKE_BUCKET: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
           CHAOS_ERROR_RATE: !Ref ChaosErrorRate
+          USER_POOL_ID: !ImportValue { "Fn::Sub": "agriprice-${Env}-UserPoolId" }
+          INGESTION_FUNCTION: !Sub "agriprice-${Env}-ingestion:live"
       Policies:
         - Version: "2012-10-17"
           Statement:
@@ -94,7 +97,7 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["FARMER#*", "PRICE#*", "SUPPLY#*", "DEMAND#*"]
+                  dynamodb:LeadingKeys: ["FARMER#*", "PRICE#*", "SUPPLY#*", "DEMAND#*", "MATCH#*", "CONFIG#*"]
             - Sid: MyDemandIndex
               Effect: Allow
               Action: dynamodb:Query
@@ -118,6 +121,16 @@ Resources:
               Resource: !Sub
                 - "arn:${AWS::Partition}:s3:::${Bucket}/inbox/field/*"
                 - Bucket: !ImportValue { "Fn::Sub": "agriprice-${Env}-LakeBucket" }
+            - Sid: AdminManagesUserRoles  # FR10: invite users and assign buyer/officer/admin groups
+              Effect: Allow
+              Action: [cognito-idp:ListUsers, cognito-idp:ListUsersInGroup, cognito-idp:AdminCreateUser, cognito-idp:AdminAddUserToGroup, cognito-idp:AdminRemoveUserFromGroup, cognito-idp:AdminListGroupsForUser]
+              Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-UserPoolArn" }
+            - Sid: AdminRunsIngestionNow
+              Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:agriprice-${Env}-ingestion"
+                - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:agriprice-${Env}-ingestion:*"
             - Sid: PhonePseudonymKey
               Effect: Allow
               Action: ssm:GetParameter
