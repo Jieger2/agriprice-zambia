@@ -9,6 +9,8 @@ Usage:
   python scripts/deploy.py outputs --env dev         # print URLs (USSD callback, web app, dashboard)
   python scripts/deploy.py run-pipeline --env dev    # run ingestion now, then the analytics refresh
   python scripts/deploy.py demo-rollback --env prod  # canary deploy of a faulty version (see docs/demo-script.md)
+  python scripts/deploy.py add-user --env dev --email you@example.com --role admins   # invite the first admin
+  python scripts/deploy.py doctor                    # check tools, credentials and Region before deploying
   python scripts/deploy.py destroy --env dev
 
 Environment variables (optional):
@@ -290,16 +292,66 @@ def destroy(env: str) -> None:
     log("Retained on purpose (delete manually if you really want to): DynamoDB table, lake and trail buckets.")
 
 
+def doctor() -> None:
+    """Check everything a first deployment needs, with a fix for each problem."""
+    ok = True
+    if sys.version_info[:2] not in ((3, 12), (3, 13)):
+        log(f"WARN Python {sys.version.split()[0]}: use 3.12 (Lambda runtime) to avoid build differences")
+    for tool, hint in (("sam", "install the AWS SAM CLI: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"),
+                       ("aws", "install the AWS CLI v2 and run: aws configure")):
+        if shutil.which(tool):
+            log(f"OK   {tool} found")
+        else:
+            ok = False
+            log(f"FAIL {tool} not found - {hint}")
+    try:
+        ident = boto3.client("sts", region_name=REGION).get_caller_identity()
+        log(f"OK   AWS account {ident['Account']} as {ident['Arn'].split(':')[-1]}")
+        if ident["Arn"].endswith(":root"):
+            log("WARN signed in with root credentials: create an IAM user with AdministratorAccess and use its access key instead")
+    except Exception as e:  # noqa: BLE001 - report any credential problem plainly
+        ok = False
+        log(f"FAIL no working AWS credentials ({type(e).__name__}) - run: aws configure  (Region: {REGION})")
+    log(f"OK   Region {REGION}" if REGION else "FAIL no Region set")
+    log("Ready to deploy." if ok else "Fix the FAIL lines above, then run doctor again.")
+    if not ok:
+        sys.exit(1)
+
+
+def add_user(env: str, email: str, role: str) -> None:
+    """Invite a web user (Cognito emails a temporary password) and put them in a role group."""
+    pool = outputs(stack_name(env, "data")).get("UserPoolId")
+    if not pool:
+        sys.exit("The data stack is not deployed yet: run deploy first.")
+    idp = boto3.client("cognito-idp", region_name=REGION)
+    try:
+        idp.admin_create_user(UserPoolId=pool, Username=email, UserAttributes=[
+            {"Name": "email", "Value": email}, {"Name": "email_verified", "Value": "true"}], DesiredDeliveryMediums=["EMAIL"])
+        log(f"invited {email}: Cognito has emailed a temporary password")
+    except idp.exceptions.UsernameExistsException:
+        log(f"{email} already exists")
+    idp.admin_add_user_to_group(UserPoolId=pool, Username=email, GroupName=role)
+    log(f"{email} is now in '{role}'. Sign in at the web URL from: python scripts/deploy.py outputs --env {env}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "demo-rollback", "destroy"])
+    ap.add_argument("command", choices=["doctor", "bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "add-user", "demo-rollback", "destroy"])
     ap.add_argument("--env", default="dev", choices=["dev", "prod"])
     ap.add_argument("--only", help="comma-separated parts: " + ",".join(ORDER))
     ap.add_argument("--sms-mode", choices=["log", "outbox", "sandbox", "live"])
     ap.add_argument("--rotate", action="store_true", help="secrets: regenerate pepper and callback token")
     ap.add_argument("--rate", default="0.5", help="demo-rollback: fraction of requests that fail")
+    ap.add_argument("--email", help="add-user: the person's email address")
+    ap.add_argument("--role", default="admins", choices=["admins", "officers", "buyers"], help="add-user: role group")
     a = ap.parse_args()
-    if a.command == "bootstrap":
+    if a.command == "doctor":
+        doctor()
+    elif a.command == "add-user":
+        if not a.email:
+            ap.error("add-user needs --email")
+        add_user(a.env, a.email, a.role)
+    elif a.command == "bootstrap":
         bootstrap()
     elif a.command == "deploy":
         deploy(a.env, a.only.split(",") if a.only else None, a.sms_mode)

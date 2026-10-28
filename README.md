@@ -66,10 +66,12 @@ The local server ingests the bundled **synthetic** sample prices (`data/zambia_s
 Requirements: Python 3.12, [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html), and AWS credentials for a standalone account. The default Region is `eu-north-1` (Stockholm), which is enabled on every account. To use another Region, set `AWS_REGION` locally and the repository variable `AWS_REGION` for CI. For example, use `af-south-1` (Cape Town) once it has been opted in under *Account → AWS Regions*; nothing else changes.
 
 ```bash
+python scripts/deploy.py doctor               # checks SAM CLI, AWS CLI, credentials and Region
 python scripts/deploy.py bootstrap            # once per account: OIDC role for GitHub, artifacts bucket, $20 budget
 python scripts/deploy.py deploy --env dev     # network → data → 6 services → web → dashboard
 python scripts/deploy.py run-pipeline --env dev   # first ingestion + analytics refresh
 python scripts/deploy.py outputs --env dev    # web URL, USSD callback URL, dashboard link
+python scripts/deploy.py add-user --env dev --email you@example.com --role admins   # first administrator
 ```
 
 Each stack is deployed in dependency order, and a marker can do the same in a clean account from this repository. To redeploy one service only: `python scripts/deploy.py deploy --env dev --only matching`.
