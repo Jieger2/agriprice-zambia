@@ -13,13 +13,14 @@ from __future__ import annotations
 import os
 import time
 from collections import defaultdict
+from datetime import date, timedelta
 
 import boto3
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, Response, content_types
 from aws_lambda_powertools.event_handler.exceptions import BadRequestError, NotFoundError
 from aws_lambda_powertools.metrics import MetricUnit
 
-from agricommon import catalog, codec, obs, repo
+from agricommon import catalog, codec, obs, repo, weather
 
 logger, tracer, metrics = obs.tools("analytics-api")
 app = APIGatewayRestResolver()
@@ -83,16 +84,31 @@ def holt_winters(values: list[float], horizon: int = 3, season: int = SEASON, al
     return [level + (h + 1) * trend + seasonals[(n + h) % season] for h in range(horizon)]
 
 
-def build_payload(series: list[tuple[str, int, int, int]]) -> dict:
-    """series rows: (yyyy-mm, avg, min, max) in ngwee/kg."""
+def weekly_forecast(last_value: float, next_month: float, start: date, weeks: int = 4) -> list[tuple[str, float]]:
+    """FR12: next 4 weeks, interpolated from the latest monthly value towards next month's forecast."""
+    return [((start + timedelta(days=7 * k)).isoformat(), last_value + (next_month - last_value) * min(1.0, 7 * k / 30)) for k in range(1, weeks + 1)]
+
+
+def build_payload(series: list[tuple[str, int, int, int]], weather_ratio: float | None = None, today: date | None = None) -> dict:
+    """series rows: (yyyy-mm, avg, min, max) in ngwee/kg.
+
+    f  = 3 monthly forecasts, w = 4 weekly forecasts (FR12), both multiplied by the weather
+    adjustment for the forecast month when a rainfall signal is available (wx).
+    """
+    today = today or date.today()
     series = sorted(series)
     filled = fill_gaps([(m, a) for m, a, _, _ in series])
     fc = holt_winters([float(v) for _, v in filled]) if filled else []
     last = filled[-1][0] if filled else None
+    adj = weather.price_adjustment(weather_ratio, today.month)
+    monthly = [[month_add(last, i + 1).replace("-", ""), max(0, round(v * adj))] for i, v in enumerate(fc)] if last else []
+    weekly = [[d, max(0, round(v))] for d, v in weekly_forecast(float(filled[-1][1]), monthly[0][1], today)] if monthly else []
     return {
         "s": [[m.replace("-", ""), a, lo, hi] for m, a, lo, hi in series],
         "si": seasonal_index([(m, a) for m, a, _, _ in series]),
-        "f": [[month_add(last, i + 1).replace("-", ""), max(0, round(v))] for i, v in enumerate(fc)] if last else [],
+        "f": monthly,
+        "w": weekly,
+        "wx": {"ratio": round(weather_ratio, 2) if weather_ratio is not None else None, "adj": round(adj, 3)},
     }
 
 
@@ -110,6 +126,13 @@ def group_rows(rows: list[dict]) -> dict[tuple[str, str], list[tuple[str, int, i
         avg = round(sum(p[0] * p[3] for p in parts) / total)
         out[(crop, NATIONAL)].append((month, avg, min(p[1] for p in parts), max(p[2] for p in parts)))
     return out
+
+
+def _decimal_safe(payload: dict) -> dict:
+    """DynamoDB rejects floats: store the weather ratio and factor as strings."""
+    wx = payload.get("wx") or {}
+    payload["wx"] = {k: (str(v) if isinstance(v, float) else v) for k, v in wx.items()}
+    return payload
 
 
 # ---------------------------------------------------------------- Athena refresh
@@ -152,8 +175,11 @@ def run_athena(sql: str, timeout_s: int = 240) -> list[dict]:
 def refresh() -> dict:
     rows = run_athena(AGG_SQL.format(db=os.environ["GLUE_DATABASE"]))
     groups = group_rows(rows)
+    ratios = {p: weather.rainfall_ratio(p) for p in catalog.province_codes()}  # one call per province, reused for every crop
+    known = [r for r in ratios.values() if r is not None]
+    ratios[NATIONAL] = sum(known) / len(known) if known else None
     for (crop, prov), series in groups.items():
-        repo.put_series(crop, prov, build_payload(series))
+        repo.put_series(crop, prov, _decimal_safe(build_payload(series, ratios.get(prov))))
     metrics.add_metric(name="SeriesRefreshed", unit=MetricUnit.Count, value=len(groups))
     return {"series": len(groups), "rows": len(rows)}
 
@@ -171,7 +197,7 @@ def get_series():
     item = repo.get_series(crop, region)
     if not item:
         raise NotFoundError("no series yet")
-    body = codec.dumps({"c": crop, "r": region, "u": item.get("updated"), "s": item.get("s", []), "si": item.get("si", []), "f": item.get("f", [])})
+    body = codec.dumps({"c": crop, "r": region, "u": item.get("updated"), "s": item.get("s", []), "si": item.get("si", []), "f": item.get("f", []), "w": item.get("w", []), "wx": item.get("wx", {})})
     tag = codec.etag(body)
     headers = {"ETag": tag, "Cache-Control": "public, max-age=3600"}
     if (app.current_event.headers.get("If-None-Match") or app.current_event.headers.get("if-none-match")) == tag:

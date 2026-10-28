@@ -6,7 +6,8 @@ Pipeline per source:
   -> update current prices in DynamoDB -> publish changes to SQS (async path)
   -> Athena INSERT INTO the partitioned Parquet table (serverless ETL; no Glue jobs)
 
-Source types (SOURCES_JSON env var):
+Sources: built-ins from SOURCES_JSON, merged with the administrators' list (CONFIG#sources).
+Source types:
   wfp_csv     WFP market-price CSV over HTTPS (Humanitarian Data Exchange format)
   wfp_csv_s3  the same format read from the lake bucket (seed / offline demo data)
   s3_inbox    extension-officer field reports written by the Listings API
@@ -28,6 +29,7 @@ import boto3
 from aws_lambda_powertools.metrics import MetricUnit
 
 from agricommon import bus, catalog, obs, repo
+from agricommon import sources as source_config
 
 logger, tracer, metrics = obs.tools("ingestion")
 
@@ -212,7 +214,12 @@ def handler(event: dict, context) -> dict:
     logger.set_correlation_id(run_id)
     bucket = os.environ["LAKE_BUCKET"]
     ingest_day = datetime.now(UTC).date().isoformat()
-    sources = json.loads(os.environ.get("SOURCES_JSON", "[]"))
+    try:
+        admin_doc = repo.get_config("sources")
+    except Exception:  # admin overrides are optional; built-in sources still run
+        logger.exception("ingest.admin_sources_unavailable")
+        admin_doc = None
+    sources = source_config.effective(admin_doc)
     lookback = int((event or {}).get("lookback_days", DEFAULT_LOOKBACK_DAYS))
     results, failures, total = [], 0, 0
     for src in sources:

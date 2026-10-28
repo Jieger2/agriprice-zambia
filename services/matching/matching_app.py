@@ -54,7 +54,8 @@ def rank_demand_for_supply(listing: dict, demand: list[dict]) -> list[tuple[dict
 
 def on_demand(demand: dict) -> int:
     supply = repo.query_cells("SUPPLY", geo.neighbours(geo.cell(float(demand["lat"]), float(demand["lon"]))), demand["crop"])
-    matches = rank_supply_for_demand(demand, supply)
+    # only pairs not seen before are notified (exactly-once per pair, see repo.put_match)
+    matches = [(s, km) for s, km in rank_supply_for_demand(demand, supply)[:50] if repo.put_match(demand, s, km)]
     if not matches:
         return 0
     crop = _crop_name(demand["crop"])
@@ -68,7 +69,7 @@ def on_demand(demand: dict) -> int:
 
 def on_listing(listing: dict) -> int:
     demand = repo.query_cells("DEMAND", geo.neighbours(geo.cell(float(listing["lat"]), float(listing["lon"]))), listing["crop"])
-    matches = rank_demand_for_supply(listing, demand)
+    matches = [(d, km) for d, km in rank_demand_for_supply(listing, demand)[:50] if repo.put_match(d, listing, km)]
     if not matches:
         return 0
     crop = _crop_name(listing["crop"])
