@@ -173,3 +173,17 @@ def test_bus_batches_messages(aws):
     assert n == 23
     msgs = boto3.client("sqs").receive_message(QueueUrl=aws["queue_url"], MaxNumberOfMessages=1, MessageAttributeNames=["All"])["Messages"]
     assert msgs[0]["MessageAttributes"]["correlation_id"]["StringValue"] == "cid"
+
+
+def test_pair_notified_once_when_both_events_arrive(matching, ctx, monkeypatch):
+    """ListingCreated and DemandPosted for the same pair (or an SQS redelivery) -> one SMS each side."""
+    sent = []
+    monkeypatch.setattr(matching.sms, "send", lambda to, body: sent.append(to))
+    li = farmer_listing("NDL")
+    d = buyer_demand()
+    events = [sqs_record({"detail-type": "ListingCreated", "detail": {"pk": li["PK"], "sk": li["SK"]}}, mid="1"),
+              sqs_record({"detail-type": "DemandPosted", "detail": {"pk": d["PK"], "sk": d["SK"]}}, mid="2"),
+              sqs_record({"detail-type": "DemandPosted", "detail": {"pk": d["PK"], "sk": d["SK"]}}, mid="3")]
+    assert matching.handler({"Records": events}, ctx)["batchItemFailures"] == []
+    assert sorted(sent) == ["+260966000002", "+260977000001"]
+    assert len(repo.matches_for("d1")) == 1

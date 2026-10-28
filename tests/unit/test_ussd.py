@@ -25,9 +25,9 @@ def seed_price(crop="MZE", market="NDL", p=570, d="2026-10-26", prev=552):
     boto3.resource("dynamodb").Table("agriprice-test").put_item(Item={"PK": f"PRICE#{crop}#{market}", "SK": "CURRENT", "p": p, "d": d, "prev": prev, "prov": "CB", "src": "t"})
 
 
-def register(mod, ctx):
-    # 5 = register, 2 = Copperbelt, 1 = Ndola
-    return dial(mod, ctx, "5*2*1", session="reg")
+def register(mod, ctx, name="mary banda"):
+    # 5 = register, 2 = Copperbelt, 1 = Ndola, then the farmer's name (FR1)
+    return dial(mod, ctx, f"5*2*1*{name}", session="reg")
 
 
 def test_rejects_bad_token(ussd, ctx):
@@ -52,8 +52,14 @@ def test_register_then_check_prices(ussd, ctx):
     assert "Copperbelt" in body
     _, body = dial(ussd, ctx, "5*2", session="r1")
     assert "1.Ndola" in body
+    assert dial(ussd, ctx, "5*2*1", session="r1")[1] == "CON Your name (0 to skip):"
     _, body = register(ussd, ctx)
-    assert body.startswith("END Registered at Ndola")
+    assert body.startswith("END Registered Mary Banda at Ndola")
+    import boto3
+
+    farmer = [i for i in boto3.resource("dynamodb").Table("agriprice-test").scan()["Items"] if i["PK"].startswith("FARMER#")][0]
+    assert farmer["name"] == "Mary Banda" and farmer["market"] == "NDL"
+    assert register(ussd, ctx, name="0")[1].startswith("END Registered at Ndola")
     seed_price()
     seed_price(market="KTW", p=560, prev=560)
     _, body = dial(ussd, ctx, "1", session="p1")
@@ -78,28 +84,38 @@ def test_sell_requires_registration(ussd, ctx):
 
 def test_sell_flow_creates_listing_and_event(ussd, ctx):
     register(ussd, ctx)
-    assert dial(ussd, ctx, "2*1", session="s")[1].startswith("CON Quantity of Maize")
-    assert "Sell 500kg Maize at Ndola?" in dial(ussd, ctx, "2*1*500", session="s")[1]
-    _, body = dial(ussd, ctx, "2*1*500*1", session="s")
+    assert "2.50kg bags" in dial(ussd, ctx, "2*1", session="s")[1]
+    assert dial(ussd, ctx, "2*1*2", session="s")[1] == "CON How many 50kg bags of Maize?"
+    assert "2.In 2 weeks" in dial(ussd, ctx, "2*1*2*10", session="s")[1]
+    body = dial(ussd, ctx, "2*1*2*10*2", session="s")[1]
+    assert "Sell 500kg Maize at Ndola from" in body
+    _, body = dial(ussd, ctx, "2*1*2*10*2*1", session="s")
     assert body.startswith("END Listed 500kg Maize")
     import boto3
 
     items = boto3.resource("dynamodb").Table("agriprice-test").scan()["Items"]
-    assert any(i["PK"].startswith("SUPPLY#") and i["q"] == 500 for i in items)
-    assert dial(ussd, ctx, "2*1*500*2", session="s2")[1] == "END Cancelled."
-    assert "Invalid" in dial(ussd, ctx, "2*1*abc", session="s3")[1]
+    listing = [i for i in items if i["PK"].startswith("SUPPLY#")][0]
+    assert listing["q"] == 500 and listing["unit"] == "bag50" and listing["from"] > listing["SK"][:0]
+    assert dial(ussd, ctx, "2*1*1*300*1*2", session="s2")[1] == "END Cancelled."
+    assert "Invalid" in dial(ussd, ctx, "2*1*1*abc", session="s3")[1]
+    assert "Invalid" in dial(ussd, ctx, "2*1*7", session="s4")[1]
+    assert "Invalid" in dial(ussd, ctx, "2*1*1*300*9", session="s5")[1]
 
 
-def test_alert_flow(ussd, ctx):
+def test_alert_flow_both_directions(ussd, ctx):
     register(ussd, ctx)
-    assert "above K per 50kg" in dial(ussd, ctx, "3*1", session="a")[1]
-    _, body = dial(ussd, ctx, "3*1*300", session="a")
+    assert "2.Below a price" in dial(ussd, ctx, "3*1", session="a")[1]
+    assert dial(ussd, ctx, "3*1*1", session="a")[1] == "CON Price in K per 50kg:"
+    _, body = dial(ussd, ctx, "3*1*1*300", session="a")
     assert body == "END Alert set: Maize above K300/50kg at Ndola."
+    _, body = dial(ussd, ctx, "3*1*2*250", session="a3")
+    assert body == "END Alert set: Maize below K250/50kg at Ndola."
     import boto3
 
-    item = boto3.resource("dynamodb").Table("agriprice-test").scan(FilterExpression="begins_with(PK, :p)", ExpressionAttributeValues={":p": "ALERT#"})["Items"][0]
-    assert item["thr"] == 600 and item["PK"] == "ALERT#MZE#NDL"
-    assert "Invalid" in dial(ussd, ctx, "3*1*0", session="a2")[1]
+    items = boto3.resource("dynamodb").Table("agriprice-test").scan(FilterExpression="begins_with(PK, :p)", ExpressionAttributeValues={":p": "ALERT#"})["Items"]
+    assert {(i["dir"], int(i["thr"])) for i in items} == {("up", 600), ("down", 500)}
+    assert "Invalid" in dial(ussd, ctx, "3*1*1*0", session="a2")[1]
+    assert "Invalid" in dial(ussd, ctx, "3*1*5", session="a4")[1]
 
 
 def test_language_switch(ussd, ctx):
@@ -122,8 +138,8 @@ def test_resume_after_dropped_session(ussd, ctx):
     _, body = dial(ussd, ctx, "", session="d2")  # still waiting for an answer
     assert "Continue" in body
     _, body = dial(ussd, ctx, "1", session="d2")
-    assert body.startswith("CON Quantity of Maize")  # back on the quantity screen
-    _, body = dial(ussd, ctx, "1*200", session="d2")
+    assert body.startswith("CON Count your Maize in")  # back on the unit screen
+    _, body = dial(ussd, ctx, "1*1*200*1", session="d2")
     assert "Sell 200kg" in body
     # declining the resume returns the main menu
     dial(ussd, ctx, "2*1", session="d3")

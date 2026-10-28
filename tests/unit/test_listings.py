@@ -32,7 +32,7 @@ def seed(crop="MZE", market="NDL", p=570, d="2026-10-26", prev=552):
 def test_markets_dictionary_is_cacheable(api, ctx):
     status, body, headers = call(api, ctx, "GET", "/api/markets")
     assert status == 200 and len(body["m"]) == 20 and ["MZE", "Maize"] in body["c"]
-    assert "max-age=86400" in header(headers, "Cache-Control")
+    assert "max-age=3600" in header(headers, "Cache-Control")
     status, _, _ = call(api, ctx, "GET", "/api/markets", headers={"If-None-Match": header(headers, "ETag")})
     assert status == 304
 
