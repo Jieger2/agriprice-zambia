@@ -189,6 +189,7 @@ def _create_demand(body: dict) -> dict:
     item = repo.put_demand(cell, crop, demand_id, claims["sub"], phone, qty, pmax, lat, lon, radius)
     bus.publish_event("DemandPosted", {"pk": f"DEMAND#{cell}", "sk": item["SK"]}, _cid())
     metrics.add_metric(name="DemandsPosted", unit=MetricUnit.Count, value=1)
+    repo.bump(demands=1)
     return {"id": demand_id}
 
 
@@ -203,6 +204,17 @@ def my_demand():
     claims = _require("buyers")
     rows = repo.demands_by_owner(claims["sub"])
     return _json([{"id": r["id"], "c": r["crop"], "q": r["q"], "p": r["pmax"], "r": r["r"], "ts": r["ts"], "n": len(repo.matches_for(r["id"]))} for r in rows])
+
+
+@app.delete("/api/demand/<demand_id>")
+def close_demand(demand_id: str):
+    """Buyer closes a demand (bought enough / changed plans): it stops matching new supply. Past matches stay visible."""
+    claims = _require("buyers")
+    mine = [d for d in repo.demands_by_owner(claims["sub"], 100) if d["id"] == demand_id]
+    if not mine:
+        raise NotFoundError("demand not found")
+    repo.delete_item(mine[0]["PK"], mine[0]["SK"])
+    return _json({"closed": demand_id})
 
 
 @app.get("/api/demand/<demand_id>/matches")
@@ -224,6 +236,8 @@ def _register_farmer(body: dict) -> dict:
     if lang not in ("en", "bem", "nya"):
         raise BadRequestError("unsupported language")
     pid = privacy.phone_id(phone)
+    if not (repo.get_farmer(pid) or {}).get("market"):
+        repo.bump(farmers=1)
     repo.put_farmer(pid, phone, market, lang, str(body.get("name", ""))[:60], registered_by=_claims().get("sub", "officer"))
     metrics.add_metric(name="FarmersRegistered", unit=MetricUnit.Count, value=1)
     return {"id": pid}
@@ -258,6 +272,7 @@ def _create_listing(body: dict) -> dict:
     item = repo.put_supply(cell, crop, pid, farmer["phone"], qty, m.code, m.lat, m.lon, unit, available)
     bus.publish_event("ListingCreated", {"pk": f"SUPPLY#{cell}", "sk": item["SK"]}, _cid())
     metrics.add_metric(name="ListingsCreated", unit=MetricUnit.Count, value=1)
+    repo.bump(listings=1)
     return {"sk": item["SK"]}
 
 
@@ -281,6 +296,7 @@ def _field_price(body: dict) -> dict:
     key = f"inbox/field/{obs_date}/{uuid.uuid4().hex}.json"
     record = {"c": crop, "m": market, "p": p, "d": obs_date, "by": _claims().get("sub", "officer")}
     boto3.client("s3").put_object(Bucket=os.environ["LAKE_BUCKET"], Key=key, Body=json.dumps(record).encode(), ContentType="application/json")
+    repo.bump(field_reports=1)
     return {"queued": key.rsplit("/", 1)[-1]}
 
 
@@ -298,12 +314,71 @@ def regional_board():
     region = q.get("r", "")
     if region not in catalog.province_codes():
         raise BadRequestError("unknown province code")
-    codes = [m.code for m in catalog.markets_in_province(region)]
+    markets = catalog.markets_in_province(region)
+    codes = [m.code for m in markets]
+    cells = {geo.cell(m.lat, m.lon) for m in markets}
+    supply: dict[str, int] = {}
+    for item in repo.query_cells_all("SUPPLY", cells):
+        if item["market"] in codes:
+            supply[item["crop"]] = supply.get(item["crop"], 0) + int(item["q"])
     rows = []
     for crop in catalog.commodity_codes():
         prices = repo.get_prices(crop, codes)
-        rows.append({"c": crop, "p": {code: codec.price_record(crop, code, p["p"], p["d"], p.get("prev") or None) for code, p in prices.items()}})
+        rows.append({"c": crop, "s": supply.get(crop, 0), "p": {code: codec.price_record(crop, code, p["p"], p["d"], p.get("prev") or None) for code, p in prices.items()}})
     return _json({"r": region, "m": codes, "rows": rows})
+
+
+def _farmer_view(f: dict) -> dict:
+    items = repo.farmer_items(f["pid"])
+    return {
+        "pid": f["pid"], "name": f.get("name", ""), "phone": f["phone"], "m": f.get("market", ""), "lang": f.get("lang", "en"), "created": f.get("created"),
+        "listings": [{"pk": i["PK"], "sk": i["SK"], "c": i["crop"], "q": i["q"], "f": i.get("from", ""), "ts": i["ts"]} for i in items["listings"]],
+        "alerts": [{"pk": i["PK"], "sk": i["SK"], "c": i.get("crop", i["PK"].split("#")[1]), "m": i.get("market", i["PK"].split("#")[2]), "dir": i.get("dir", "up"), "thr": i["thr"]} for i in items["alerts"]],
+    }
+
+
+@app.get("/api/officer/farmers")
+def my_farmers():
+    """Farmers this officer registered, with their live listings and alerts (officer <-> farmer link)."""
+    claims = _require("officers")
+    return _json([_farmer_view(f) for f in repo.farmers_by_officer(claims["sub"]) if f.get("pid")])
+
+
+def _officer_farmer(pid: str) -> dict:
+    claims = _require("officers")
+    farmer = repo.get_farmer(pid)
+    groups = claims.get("cognito:groups") or ""
+    if not farmer or (farmer.get("by") != claims["sub"] and "admins" not in str(groups)):
+        raise ForbiddenError("you can only manage farmers you registered")
+    return farmer
+
+
+@app.post("/api/officer/farmers/<pid>/remove")
+def officer_remove_item(pid: str):
+    """Cancel a listing or remove an alert on a farmer's behalf."""
+    _officer_farmer(pid)
+    body = _body()
+    owned = repo.farmer_items(pid)
+    target = next((i for i in owned["listings"] + owned["alerts"] if i["PK"] == body.get("pk") and i["SK"] == body.get("sk")), None)
+    if not target:
+        raise NotFoundError("item not found for this farmer")
+    repo.delete_item(target["PK"], target["SK"])
+    return _json({"removed": True})
+
+
+@app.post("/api/officer/farmers/<pid>/alerts")
+def officer_add_alert(pid: str):
+    """Set a price alert on a farmer's behalf (the SMS goes to the farmer)."""
+    farmer = _officer_farmer(pid)
+    body = _body()
+    crop = _crop(body.get("c"))
+    direction = body.get("dir", "up")
+    if direction not in ("up", "down"):
+        raise BadRequestError("dir must be up or down")
+    price_k = _int(body.get("k"), "k", 1, 100_000)
+    repo.put_alert(crop, farmer["market"], pid, farmer["phone"], round(price_k * 100 / codec.BAG_KG), direction, farmer.get("lang", "en"))
+    repo.bump(alerts=1)
+    return _json({"set": True}, status=201)
 
 
 # ---------------------------------------------------------------- administrators (FR10)
@@ -340,6 +415,13 @@ def admin_put_catalog():
     catalog.invalidate()
     logger.info("admin.catalog_saved", extra={"markets": len(doc["markets"]), "commodities": len(doc["commodities"]), "units": len(doc["units"])})
     return _json({"saved": True, "markets": len(catalog.markets()), "commodities": len(catalog.commodities())})
+
+
+@app.get("/api/admin/overview")
+def admin_overview():
+    """Platform activity: farmers, listings, demands, matches, alerts, SMS, field reports, ingestion."""
+    _admin()
+    return _json(repo.get_stats(7))
 
 
 @app.get("/api/admin/sources")

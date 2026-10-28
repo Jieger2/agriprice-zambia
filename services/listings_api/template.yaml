@@ -93,11 +93,11 @@ Resources:
           Statement:
             - Sid: OwnKeysOnly
               Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:BatchGetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+              Action: [dynamodb:GetItem, dynamodb:BatchGetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["FARMER#*", "PRICE#*", "SUPPLY#*", "DEMAND#*", "MATCH#*", "CONFIG#*"]
+                  dynamodb:LeadingKeys: ["FARMER#*", "PRICE#*", "SUPPLY#*", "DEMAND#*", "MATCH#*", "CONFIG#*", "ALERT#*", "STATS#*"]
             - Sid: MyDemandIndex
               Effect: Allow
               Action: dynamodb:Query
@@ -106,7 +106,7 @@ Resources:
                 - TableArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["OWNER#*"]
+                  dynamodb:LeadingKeys: ["OWNER#*", "OFFICER#*", "FARMERITEMS#*"]
             - Sid: IdempotencyRecords
               Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]

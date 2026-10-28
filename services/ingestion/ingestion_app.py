@@ -232,6 +232,7 @@ def handler(event: dict, context) -> dict:
             failures += 1
             logger.exception("ingest.source_failed", extra={"source": src.get("id")})
     metrics.add_metric(name="IngestedRecords", unit=MetricUnit.Count, value=total)
+    repo.bump(ingestion_runs=1, ingested_rows=total, price_changes=sum(r.get("changes", 0) for r in results))
     metrics.add_metric(name="IngestionFailures", unit=MetricUnit.Count, value=failures)
     if total:
         results.append({"athena_query": start_curation(ingest_day, run_id)})

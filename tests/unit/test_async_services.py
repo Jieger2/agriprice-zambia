@@ -130,7 +130,7 @@ def test_alert_slot_released_when_sms_fails(alerts, ctx, monkeypatch):
     assert repo.claim_alert_slot("pid1", "MZE", "2026-10-26") is True  # slot was released for the retry
 
 
-def test_sms_log_mode_and_validation(monkeypatch):
+def test_sms_log_mode_and_validation(aws, monkeypatch):
     from agricommon import sms
 
     assert sms.send("+260977000001", "hi")["status"] == "logged"
@@ -139,7 +139,7 @@ def test_sms_log_mode_and_validation(monkeypatch):
         sms.send("+260977000001", "hi")
 
 
-def test_sms_sandbox_call(monkeypatch):
+def test_sms_sandbox_call(aws, monkeypatch):
     from agricommon import sms
 
     captured = {}

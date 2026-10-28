@@ -58,6 +58,7 @@ def on_demand(demand: dict) -> int:
     matches = [(s, km) for s, km in rank_supply_for_demand(demand, supply)[:50] if repo.put_match(demand, s, km)]
     if not matches:
         return 0
+    repo.bump(matches=len(matches))
     crop = _crop_name(demand["crop"])
     nearest, km = matches[0]
     sms.send(demand["phone"], i18n.t("sms_match_buyer", n=len(matches), crop=crop, qty=nearest["q"], market=_market_name(nearest["market"]), km=round(km), phone=nearest["phone"]))
@@ -72,6 +73,7 @@ def on_listing(listing: dict) -> int:
     matches = [(d, km) for d, km in rank_demand_for_supply(listing, demand)[:50] if repo.put_match(d, listing, km)]
     if not matches:
         return 0
+    repo.bump(matches=len(matches))
     crop = _crop_name(listing["crop"])
     farmer = repo.get_farmer(listing["pid"]) or {}
     best, _ = matches[0]

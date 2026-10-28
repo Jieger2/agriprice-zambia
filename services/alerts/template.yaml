@@ -64,11 +64,11 @@ Resources:
                   dynamodb:LeadingKeys: ["ALERT#*"]
             - Sid: AlertDedupeLog
               Effect: Allow
-              Action: [dynamodb:PutItem, dynamodb:DeleteItem]
+              Action: [dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:UpdateItem]
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["ALERTLOG#*", "SMSOUT#*"]
+                  dynamodb:LeadingKeys: ["ALERTLOG#*", "SMSOUT#*", "STATS#*"]
             - Sid: ReadAdminCatalog
               Effect: Allow
               Action: dynamodb:GetItem

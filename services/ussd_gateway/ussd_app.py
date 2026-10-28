@@ -20,6 +20,7 @@ import ipaddress
 import os
 import re
 import urllib.parse
+import uuid
 from datetime import date, timedelta
 
 from aws_lambda_powertools.metrics import MetricUnit
@@ -133,7 +134,7 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         return "END", "\n".join([hdr, *rows, i18n.t("sms_hint", lang, code=crop["short"].upper())])
 
     home = catalog.markets().get((farmer or {}).get("market", ""))
-    if top in ("2", "3") and not home:
+    if top in ("2", "3", "6", "7") and not home:
         return "END", i18n.t("need_register", lang)
 
     if top == "2":  # sell my crop (FR2): crop -> unit -> quantity -> available-from -> confirm
@@ -165,6 +166,7 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         item = repo.put_supply(cell, crop["code"], ctx["pid"], ctx["phone"], qty, home.code, home.lat, home.lon, unit["code"], available.isoformat())
         bus.publish_event("ListingCreated", {"pk": f"SUPPLY#{cell}", "sk": item["SK"]}, ctx["cid"])
         metrics.add_metric(name="ListingsCreated", unit=MetricUnit.Count, value=1)
+        repo.bump(listings=1)
         return "END", i18n.t("listed", lang, qty=qty, crop=crop["name"])
 
     if top == "3":  # price alerts (FR7): crop -> direction -> price
@@ -185,8 +187,15 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         amount_k = int(parts[3])
         threshold = round(amount_k * 100 / codec.BAG_KG)  # ngwee per kg
         repo.put_alert(crop["code"], home.code, ctx["pid"], ctx["phone"], threshold, direction, lang)
+        repo.bump(alerts=1)
         word = i18n.t("above" if direction == "up" else "below", lang)
         return "END", i18n.t("alert_set", lang, crop=crop["name"], dir=word, amt=amount_k, market=home.name)
+
+    if top == "6":  # my account: review and cancel my listings, alerts and buy requests
+        return my_account(parts, ctx, home)
+
+    if top == "7":  # buy crops (buyers on feature phones, stakeholder table 4.1)
+        return buy_crops(parts, ctx, home, crops)
 
     if top == "4":  # language
         if n == 1:
@@ -216,11 +225,93 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         if n == 3:
             return "CON", i18n.t("ask_name", lang)
         name = clean_name(parts[3])
+        if not farmer or not farmer.get("market"):
+            repo.bump(farmers=1)
         repo.put_farmer(ctx["pid"], ctx["phone"], market=market.code, lang=lang, name=name)
         metrics.add_metric(name="FarmersRegistered", unit=MetricUnit.Count, value=1)
         return "END", i18n.t("registered", lang, name=(name + " ") if name else "", market=market.name)
 
     return "END", i18n.t("invalid", lang)
+
+
+def _describe_listing(i: dict) -> str:
+    crop = (catalog.commodity(i["crop"]) or {"short": i["crop"]})["short"]
+    return f"{crop} {i['q']}kg {date.fromisoformat(i.get('from') or date.today().isoformat()).strftime('%d%b')}"
+
+
+def _describe_alert(i: dict) -> str:
+    crop = (catalog.commodity(i.get("crop", "")) or {"short": i.get("crop", "")})["short"]
+    sign = ">" if i.get("dir", "up") == "up" else "<"
+    return f"{crop} {sign}K{round(i['thr'] * codec.BAG_KG / 100)} {i.get('market', '')}"
+
+
+def _describe_request(d: dict) -> str:
+    crop = (catalog.commodity(d["crop"]) or {"short": d["crop"]})["short"]
+    return f"{crop} {d['q']}kg <=K{round(d['pmax'] * codec.BAG_KG / 100)}"
+
+
+def my_account(parts: list[str], ctx: dict, home) -> tuple[str, str]:
+    """6 -> 1 listings | 2 alerts | 3 buy requests -> pick one to cancel / remove / close."""
+    lang, n = ctx["lang"], len(parts)
+    items = repo.farmer_items(ctx["pid"])
+    listings = sorted(items["listings"], key=lambda i: i["ts"], reverse=True)[:5]
+    alerts = sorted(items["alerts"], key=lambda i: i["GSI1SK"])[:5]
+    requests = [d for d in repo.demands_by_owner(f"ussd-{ctx['pid']}", 5) if d.get("ttl", 0) > repo.now()]
+    if n == 1:
+        return "CON", i18n.t("my_menu", lang, l=len(items["listings"]), a=len(items["alerts"]), d=len(requests))
+    kind = {"1": ("listings", listings, _describe_listing, "pick_cancel_listing", "none_listings", "listing_cancelled"),
+            "2": ("alerts", alerts, _describe_alert, "pick_remove_alert", "none_alerts", "alert_removed"),
+            "3": ("requests", requests, _describe_request, "pick_close_request", "none_requests", "request_closed")}.get(parts[1])
+    if not kind:
+        return "END", i18n.t("invalid", lang)
+    _, rows, describe, prompt, empty, done = kind
+    if not rows:
+        return "END", i18n.t(empty, lang)
+    if n == 2:
+        return "CON", i18n.t(prompt, lang) + "\n" + "\n".join(f"{k}.{describe(r)}" for k, r in enumerate(rows, 1))
+    chosen = pick(rows, parts[2])
+    if not chosen:
+        return "END", i18n.t("invalid", lang)
+    repo.delete_item(chosen["PK"], chosen["SK"])
+    return "END", i18n.t(done, lang, what=describe(chosen))
+
+
+BUY_RADIUS = {"1": 25, "2": 50, "3": 100}
+
+
+def buy_crops(parts: list[str], ctx: dict, home, crops: list[dict]) -> tuple[str, str]:
+    """7 -> crop -> kg -> max K/50kg -> radius -> confirm. The demand is matched exactly like a web buyer's."""
+    lang, n = ctx["lang"], len(parts)
+    if n == 1:
+        return "CON", crop_menu(lang)
+    crop = pick(crops, parts[1])
+    if not crop:
+        return "END", i18n.t("invalid", lang)
+    if n == 2:
+        return "CON", i18n.t("buy_qty", lang, crop=crop["name"])
+    if not parts[2].isdigit() or not 0 < int(parts[2]) <= MAX_QTY_KG:
+        return "END", i18n.t("invalid", lang)
+    if n == 3:
+        return "CON", i18n.t("buy_price", lang)
+    if not parts[3].isdigit() or not 0 < int(parts[3]) <= MAX_PRICE_K:
+        return "END", i18n.t("invalid", lang)
+    if n == 4:
+        return "CON", i18n.t("buy_radius", lang)
+    radius = BUY_RADIUS.get(parts[4])
+    if not radius:
+        return "END", i18n.t("invalid", lang)
+    qty, price_k = int(parts[2]), int(parts[3])
+    if n == 5:
+        return "CON", i18n.t("buy_confirm", lang, qty=qty, crop=crop["name"], price=price_k, km=radius, market=home.name)
+    if parts[5] != "1":
+        return "END", i18n.t("cancelled", lang)
+    cell = geo.cell(home.lat, home.lon)
+    demand_id = uuid.uuid4().hex[:12]
+    item = repo.put_demand(cell, crop["code"], demand_id, f"ussd-{ctx['pid']}", ctx["phone"], qty, round(price_k * 100 / codec.BAG_KG), home.lat, home.lon, radius)
+    bus.publish_event("DemandPosted", {"pk": f"DEMAND#{cell}", "sk": item["SK"]}, ctx["cid"])
+    metrics.add_metric(name="DemandsPosted", unit=MetricUnit.Count, value=1)
+    repo.bump(demands=1)
+    return "END", i18n.t("buy_posted", lang)
 
 
 def handle_ussd(form: dict[str, str]) -> str:
@@ -276,7 +367,7 @@ def handle_sms(form: dict[str, str]) -> None:
         body = i18n.t("sms_price", lang, crop=crop["name"].upper(), date=stamp, rows="; ".join(rows)) if rows else i18n.t("no_prices", lang, crop=crop["name"])
         metrics.add_metric(name="PriceLookups", unit=MetricUnit.Count, value=1)
     elif cmd == "STOP":
-        repo.delete_farmer(pid)
+        repo.forget_farmer(pid)  # profile, listings and alerts (Data Protection Act: right to erasure)
         body = i18n.t("sms_stop", lang)
     else:
         body = i18n.t("sms_help", lang)
