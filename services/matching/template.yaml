@@ -64,11 +64,11 @@ Resources:
                   dynamodb:LeadingKeys: ["SUPPLY#*", "DEMAND#*", "FARMER#*", "CONFIG#*"]
             - Sid: RecordMatchesAndMockSms
               Effect: Allow
-              Action: dynamodb:PutItem
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["MATCH#*", "SMSOUT#*"]
+                  dynamodb:LeadingKeys: ["MATCH#*", "SMSOUT#*", "STATS#*"]
             - Sid: SmsGatewayCredentials
               Effect: Allow
               Action: ssm:GetParameter

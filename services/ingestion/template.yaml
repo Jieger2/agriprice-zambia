@@ -78,7 +78,7 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["PRICE#*", "SOURCE#*", "CONFIG#*"]
+                  dynamodb:LeadingKeys: ["PRICE#*", "SOURCE#*", "CONFIG#*", "STATS#*"]
             - Sid: PublishPriceChanges
               Effect: Allow
               Action: sqs:SendMessage

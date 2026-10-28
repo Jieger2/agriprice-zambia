@@ -1,10 +1,11 @@
 """DynamoDB single-table access. Key design (see docs/architecture.md):
 
-  FARMER#<pid>               PROFILE                         farmer profile (pid = keyed phone hash)
+  FARMER#<pid>               PROFILE                         farmer profile (pid = keyed phone hash); GSI1 OFFICER#<sub> when an officer registered them
   PRICE#<crop>#<market>      CURRENT                         latest normalised price
-  SUPPLY#<cell>              <crop>#<ts>#<pid>               farmer listing (TTL 30 d)
+  SUPPLY#<cell>              <crop>#<ts>#<pid>               farmer listing (TTL 30 d); GSI1 FARMERITEMS#<pid>
   DEMAND#<cell>              <crop>#<ts>#<demandId>          buyer demand (TTL 30 d), GSI1 OWNER#<sub>
-  ALERT#<crop>#<market>      <pid>#<dir>#<threshold>         price alert subscription
+  ALERT#<crop>#<market>      <pid>#<dir>#<threshold>         price alert subscription; GSI1 FARMERITEMS#<pid>
+  STATS#<day>|STATS#ALL      COUNTS                          platform counters for the admin overview
   ALERTLOG#<pid>#<crop>      <yyyy-mm-dd>                    one alert SMS per crop per day (TTL 2 d)
   SESSION#<sessionId>        STATE                           USSD session state (TTL 180 s)
   RESUME#<pid>               LAST                            last USSD path for resume (TTL 180 s)
@@ -18,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Iterable
 from decimal import Decimal
@@ -62,9 +64,40 @@ def get_farmer(pid: str) -> dict | None:
 
 
 def put_farmer(pid: str, phone: str, market: str, lang: str = "en", name: str = "", registered_by: str = "ussd") -> dict:
-    item = {"PK": f"FARMER#{pid}", "SK": "PROFILE", "phone": phone, "market": market, "lang": lang, "name": name, "by": registered_by, "created": now()}
+    """Create or update a farmer. An officer's link to a farmer survives the farmer re-registering by USSD."""
+    existing = get_farmer(pid) or {}
+    by = registered_by if registered_by != "ussd" or not existing.get("by") else existing["by"]
+    item = {"PK": f"FARMER#{pid}", "SK": "PROFILE", "phone": phone, "market": market, "lang": lang, "name": name or existing.get("name", ""),
+            "by": by, "created": existing.get("created", now()), "pid": pid}
+    if by != "ussd":
+        item.update({"GSI1PK": f"OFFICER#{by}", "GSI1SK": f"FARMER#{item['created']}"})
     _table().put_item(Item=item)
     return item
+
+
+def farmers_by_officer(officer: str, limit: int = 100) -> list[dict]:
+    resp = _table().query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(f"OFFICER#{officer}"), ScanIndexForward=False, Limit=limit)
+    return [_clean(i) for i in resp.get("Items", [])]
+
+
+def farmer_items(pid: str) -> dict[str, list[dict]]:
+    """A farmer's active listings and alert subscriptions (GSI1 FARMERITEMS#<pid>)."""
+    resp = _table().query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(f"FARMERITEMS#{pid}"), Limit=100)
+    items = [_clean(i) for i in resp.get("Items", []) if i.get("ttl", now() + 1) > now()]
+    return {"listings": [i for i in items if i["PK"].startswith("SUPPLY#")], "alerts": [i for i in items if i["PK"].startswith("ALERT#")]}
+
+
+def delete_item(pk: str, sk: str) -> None:
+    _table().delete_item(Key={"PK": pk, "SK": sk})
+
+
+def forget_farmer(pid: str) -> int:
+    """Right to erasure (SMS STOP): profile, listings and alerts. Returns the number of items removed."""
+    items = farmer_items(pid)
+    for i in items["listings"] + items["alerts"]:
+        delete_item(i["PK"], i["SK"])
+    delete_farmer(pid)
+    return len(items["listings"]) + len(items["alerts"]) + 1
 
 
 def set_farmer_lang(pid: str, lang: str) -> None:
@@ -117,6 +150,7 @@ def put_supply(cell: str, crop: str, pid: str, phone: str, qty_kg: int, market: 
         "PK": f"SUPPLY#{cell}", "SK": f"{crop}#{ts}#{pid}", "crop": crop, "pid": pid, "phone": phone,
         "q": qty_kg, "unit": unit, "from": available_from or time.strftime("%Y-%m-%d", time.gmtime(ts)),
         "market": market, "lat": Decimal(str(lat)), "lon": Decimal(str(lon)), "ts": ts, "ttl": ts + LISTING_TTL,
+        "GSI1PK": f"FARMERITEMS#{pid}", "GSI1SK": f"SUPPLY#{ts}",
     }
     _table().put_item(Item=item)
     return _clean(item)
@@ -142,6 +176,16 @@ def query_cells(prefix: str, cells: Iterable[str], crop: str) -> list[dict]:
     return out
 
 
+def query_cells_all(prefix: str, cells: Iterable[str]) -> list[dict]:
+    """Every crop in the given cells (officer board: open supply per province)."""
+    out: list[dict] = []
+    t = _table()
+    for c in cells:
+        resp = t.query(KeyConditionExpression=Key("PK").eq(f"{prefix}#{c}"), Limit=500)
+        out.extend(_clean(i) for i in resp.get("Items", []) if i.get("ttl", now() + 1) > now())
+    return out
+
+
 def demands_by_owner(owner: str, limit: int = 20) -> list[dict]:
     resp = _table().query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(f"OWNER#{owner}"), ScanIndexForward=False, Limit=limit)
     return [_clean(i) for i in resp.get("Items", [])]
@@ -149,7 +193,8 @@ def demands_by_owner(owner: str, limit: int = 20) -> list[dict]:
 
 # ---------- alerts ----------
 def put_alert(crop: str, market: str, pid: str, phone: str, threshold_ngwee_per_kg: int, direction: str = "up", lang: str = "en") -> dict:
-    item = {"PK": f"ALERT#{crop}#{market}", "SK": f"{pid}#{direction}#{threshold_ngwee_per_kg}", "pid": pid, "phone": phone, "thr": threshold_ngwee_per_kg, "dir": direction, "lang": lang}
+    item = {"PK": f"ALERT#{crop}#{market}", "SK": f"{pid}#{direction}#{threshold_ngwee_per_kg}", "pid": pid, "phone": phone, "thr": threshold_ngwee_per_kg,
+            "dir": direction, "lang": lang, "crop": crop, "market": market, "GSI1PK": f"FARMERITEMS#{pid}", "GSI1SK": f"ALERT#{crop}#{market}#{direction}#{threshold_ngwee_per_kg}"}
     _table().put_item(Item=item)
     return item
 
@@ -275,3 +320,26 @@ def put_outbox(phone: str, body: str) -> None:
 def outbox(phone: str, limit: int = 30) -> list[dict]:
     resp = _table().query(KeyConditionExpression=Key("PK").eq(f"SMSOUT#{phone}"), ScanIndexForward=False, Limit=limit)
     return [{"body": i["body"], "ts": int(i["ts"])} for i in resp.get("Items", [])]
+
+
+# ---------- platform counters (admin overview) ----------
+def bump(**counts: int) -> None:
+    """Atomically add to today's and all-time counters. Never fails the caller."""
+    if not counts:
+        return
+    expr = "ADD " + ", ".join(f"#{k} :{k}" for k in counts)
+    names = {f"#{k}": k for k in counts}
+    values = {f":{k}": v for k, v in counts.items()}
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    try:
+        for pk in (f"STATS#{day}", "STATS#ALL"):
+            _table().update_item(Key={"PK": pk, "SK": "COUNTS"}, UpdateExpression=expr, ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+    except Exception as exc:  # counters are informational; business writes must not depend on them
+        logging.getLogger(__name__).debug("stats bump skipped: %s", exc)
+
+
+def get_stats(days: int = 7) -> dict:
+    keys = [{"PK": "STATS#ALL", "SK": "COUNTS"}] + [{"PK": f"STATS#{time.strftime('%Y-%m-%d', time.gmtime(time.time() - 86400 * d))}", "SK": "COUNTS"} for d in range(days)]
+    resp = boto3.resource("dynamodb").batch_get_item(RequestItems={config.TABLE_NAME: {"Keys": keys}})
+    found = {i["PK"]: {k: v for k, v in _clean(i).items() if k not in ("PK", "SK")} for i in resp.get("Responses", {}).get(config.TABLE_NAME, [])}
+    return {"total": found.get("STATS#ALL", {}), "days": [{"day": k["PK"][6:], **found.get(k["PK"], {})} for k in keys[1:]]}

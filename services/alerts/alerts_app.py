@@ -59,6 +59,7 @@ def record_handler(record: SQSRecord) -> None:
     sent = process_change(json.loads(record.body))
     if sent:
         metrics.add_metric(name="AlertsSent", unit=MetricUnit.Count, value=sent)
+        repo.bump(alerts_sent=sent)
 
 
 @logger.inject_lambda_context(clear_state=True)

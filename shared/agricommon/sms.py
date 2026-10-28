@@ -34,12 +34,13 @@ class SmsError(RuntimeError):
 def send(to: str, body: str, timeout: float = 5.0) -> dict:
     mode = os.environ.get("SMS_MODE", "log")
     message = text.sms(body)
+    from . import repo
+
+    repo.bump(sms=1)
     if mode == "log":
         logger.info("sms.logged", extra={"chars": len(message), "sms_mode": mode})
         return {"status": "logged", "chars": len(message)}
     if mode == "outbox":
-        from . import repo
-
         repo.put_outbox(to, message)
         logger.info("sms.outbox", extra={"chars": len(message), "sms_mode": mode})
         return {"status": "outbox", "chars": len(message)}

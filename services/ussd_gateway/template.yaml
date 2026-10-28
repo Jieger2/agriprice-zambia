@@ -91,7 +91,16 @@ Resources:
               Resource: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
               Condition:
                 ForAllValues:StringLike:
-                  dynamodb:LeadingKeys: ["FARMER#*", "SESSION#*", "RESUME#*", "PRICE#*", "SUPPLY#*", "ALERT#*", "CONFIG#*", "SMSOUT#*"]
+                  dynamodb:LeadingKeys: ["FARMER#*", "SESSION#*", "RESUME#*", "PRICE#*", "SUPPLY#*", "ALERT#*", "DEMAND#*", "CONFIG#*", "SMSOUT#*", "STATS#*"]
+            - Sid: MyAccountIndex  # "6.My account": a farmer's own listings, alerts and buy requests
+              Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub
+                - "${TableArn}/index/GSI1"
+                - TableArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-TableArn" }
+              Condition:
+                ForAllValues:StringLike:
+                  dynamodb:LeadingKeys: ["FARMERITEMS#*", "OWNER#ussd-*"]
             - Sid: PublishDomainEvents
               Effect: Allow
               Action: events:PutEvents
