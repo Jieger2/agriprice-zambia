@@ -13,9 +13,15 @@ Parameters:
     AllowedValues: ["true", "false"]
     Default: "true"
     Description: false if this account already has token.actions.githubusercontent.com
+  CreateGitHubRole:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: false where IAM OIDC is blocked (AWS "new experience" accounts); deploy from a laptop instead
 
 Conditions:
-  MakeOidc: !Equals [!Ref CreateOidcProvider, "true"]
+  WithGitHub: !Equals [!Ref CreateGitHubRole, "true"]
+  MakeOidc: !And [!Condition WithGitHub, !Equals [!Ref CreateOidcProvider, "true"]]
 
 Resources:
   GitHubOidc:
@@ -79,6 +85,7 @@ Resources:
   # Role assumed by GitHub Actions through OIDC.
   GitHubDeployRole:
     Type: AWS::IAM::Role
+    Condition: WithGitHub
     Properties:
       RoleName: agriprice-github-deploy
       MaxSessionDuration: 3600
@@ -145,6 +152,7 @@ Resources:
 
 Outputs:
   GitHubDeployRoleArn:
+    Condition: WithGitHub
     Description: Save as GitHub repository variable AWS_DEPLOY_ROLE_ARN
     Value: !GetAtt GitHubDeployRole.Arn
   CfnExecutionRoleArn:
