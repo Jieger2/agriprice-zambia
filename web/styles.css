@@ -36,7 +36,7 @@ label.grow{flex:1 1 18rem}
 .subtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.25rem 0 1rem}
 .subtabs button{border-radius:1rem;font-size:.85rem;padding:.35rem .8rem;min-height:auto}
 .subtabs button[aria-selected=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
-button.ghost{background:none;padding:.2rem .5rem;min-height:auto;font-size:.8rem}
+button.ghost{background:none;color:var(--accent);padding:.2rem .5rem;min-height:auto;font-size:.8rem}
 button.danger{color:var(--up);border-color:var(--up)}
 .grid.small th,.grid.small td{padding:.35rem .45rem;font-size:.85rem}
 .grid .wrap{word-break:break-all;max-width:18rem}
@@ -51,3 +51,11 @@ details.demand summary{cursor:pointer}
 dialog{border:1px solid var(--line);border-radius:.6rem;background:var(--card);color:var(--fg);max-width:24rem;width:90vw}
 dialog::backdrop{background:rgba(0,0,0,.4)}
 .top a.link{text-decoration:none;font-size:.85rem;padding:.3rem .6rem;border-radius:.4rem}
+.banner{background:#fff4d6;color:#5a4200;border:1px solid #e9c46a;border-radius:.4rem;padding:.6rem .8rem}
+.cards.wide{grid-template-columns:repeat(auto-fit,minmax(8rem,1fr))}
+.farmer{background:var(--card);border:1px solid var(--line);border-radius:.4rem;padding:.6rem .8rem;margin:.5rem 0}
+.farmer h4{margin:0 0 .3rem;font-size:.95rem}
+.farmer ul{margin:.2rem 0 .4rem;padding-left:1.1rem}
+.farmer form{margin-top:.4rem}
+.farmer form label{font-size:.75rem}
+.farmer input,.farmer select{min-height:2rem;padding:.25rem .4rem}

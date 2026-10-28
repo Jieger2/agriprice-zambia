@@ -27,6 +27,7 @@
 </nav>
 
 <main>
+  <p id="pending" class="banner" hidden>Your account is signed in but has no role yet. An administrator assigns Buyer, Extension officer or Administrator on the Admin page (Users &amp; roles).</p>
   <!-- ============================================================ Prices (public, FR3) -->
   <section id="prices" class="panel">
     <form id="price-form" class="row">
@@ -91,6 +92,8 @@
       <button type="submit">Show</button>
     </form>
     <div id="board" class="scroll"></div>
+    <h2>My farmers <small class="muted">(farmers you registered, their listings and alerts)</small></h2>
+    <div id="farmers"></div>
     <div class="two">
       <div>
         <h2>Register farmer</h2>
@@ -126,13 +129,20 @@
   <!-- ============================================================ Admin (admins, FR10) -->
   <section id="admin" class="panel" hidden>
     <nav class="subtabs">
-      <button data-sub="adm-markets" aria-selected="true">Markets</button>
+      <button data-sub="adm-overview" aria-selected="true">Overview</button>
+      <button data-sub="adm-markets">Markets</button>
       <button data-sub="adm-crops">Crops &amp; units</button>
       <button data-sub="adm-sources">Price sources</button>
       <button data-sub="adm-users">Users &amp; roles</button>
     </nav>
 
-    <div id="adm-markets" class="sub">
+    <div id="adm-overview" class="sub">
+      <div id="adm-totals" class="cards wide"></div>
+      <h3>Last 7 days</h3>
+      <div class="scroll"><table class="grid small"><thead><tr><th>Day</th><th>Farmers</th><th>Listings</th><th>Demands</th><th>Matches</th><th>Alerts set</th><th>Alerts sent</th><th>SMS</th><th>Field reports</th><th>Price changes</th></tr></thead><tbody id="adm-days"></tbody></table></div>
+    </div>
+
+    <div id="adm-markets" class="sub" hidden>
       <table class="grid small"><thead><tr><th>Code</th><th>Name</th><th>Province</th><th>Lat, Lon</th><th></th></tr></thead><tbody id="adm-market-rows"></tbody></table>
       <h3>Add or update a market</h3>
       <form id="adm-market-form" class="row">
@@ -203,7 +213,7 @@
   <form method="dialog" id="mock-login-form" class="stack">
     <h2>Sign in (local demo)</h2>
     <p class="muted small">Cognito is simulated locally. Pick a role to try its pages.</p>
-    <label>Role <select name="role"><option value="buyers">Buyer</option><option value="officers">Extension officer</option><option value="admins">Administrator</option></select></label>
+    <label>Role <select name="role"><option value="buyers">Buyer</option><option value="officers">Extension officer</option><option value="admins">Administrator</option><option value="">No role yet (new sign-up)</option></select></label>
     <label>Email <input name="email" type="email" value="demo@agriprice.local"></label>
     <label>Phone (receives SMS) <input name="phone" value="+260966000100"></label>
     <div class="row"><button type="submit" value="ok">Sign in</button><button type="submit" value="cancel" formnovalidate class="ghost">Cancel</button></div>

@@ -8,6 +8,8 @@
 (() => {
   'use strict';
   const CFG = window.AGRI || {};
+  // Local emulator safety net: on localhost with no Cognito configured, use the local role picker.
+  if (!CFG.cognitoDomain && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) { CFG.mockAuth = true; CFG.simulator = true; }
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -52,11 +54,11 @@
     if (e.submitter && e.submitter.value === 'cancel') return;
     const f = new FormData(form);
     const email = String(f.get('email') || 'demo@agriprice.local');
-    const payload = { sub: 'local-' + email.replace(/[^a-z0-9]/gi, ''), email, phone_number: String(f.get('phone') || ''), 'cognito:groups': [f.get('role')], 'cognito:username': email, exp: Math.floor(Date.now() / 1000) + 8 * 3600 };
+    const payload = { sub: 'local-' + email.replace(/[^a-z0-9]/gi, ''), email, phone_number: String(f.get('phone') || ''), 'cognito:groups': f.get('role') ? [f.get('role')] : [], 'cognito:username': email, exp: Math.floor(Date.now() / 1000) + 8 * 3600 };
     // Unsigned token: accepted ONLY by the local emulator (scripts/local_server.py). API Gateway rejects it.
     store.set('id_token', `${b64urlText('{"alg":"none","typ":"JWT"}')}.${b64urlText(JSON.stringify(payload))}.local`);
     store.set('id_exp', Date.now() + 8 * 3600 * 1000);
-    renderAuth(); toast('Signed in as ' + f.get('role'));
+    renderAuth(); toast('Signed in as ' + (f.get('role') || 'a new user with no role'));
   }
   async function finishLogin() {
     const code = new URLSearchParams(location.search).get('code');
@@ -231,10 +233,16 @@
     if (!(groups().includes('buyers') || groups().includes('admins'))) return;
     try {
       const { data } = await getJSON('/api/demand/mine', { cache: false });
-      $('#mine').innerHTML = data.length ? data.map((d) => `<details class="demand" data-id="${esc(d.id)}"><summary><b>${d.q.toLocaleString()} kg ${esc(cropName(d.c))}</b> · up to K${bagK(d.p)}/50kg · ${d.r} km · <span class="pill dark">${d.n} match${d.n === 1 ? '' : 'es'}</span></summary><div class="matches muted small">Loading...</div></details>`).join('')
+      $('#mine').innerHTML = data.length ? data.map((d) => `<details class="demand" data-id="${esc(d.id)}"><summary><b>${d.q.toLocaleString()} kg ${esc(cropName(d.c))}</b> · up to K${bagK(d.p)}/50kg · ${d.r} km · <span class="pill dark">${d.n} match${d.n === 1 ? '' : 'es'}</span> <button class="ghost danger" data-close-demand="${esc(d.id)}">Close</button></summary><div class="matches muted small">Loading...</div></details>`).join('')
         : '<p class="muted">No demand posted yet.</p>';
       $$('#mine details').forEach((el) => el.addEventListener('toggle', () => el.open && loadMatches(el)));
     } catch { /* offline */ }
+  }
+  async function closeDemand(e) {
+    const b = e.target.closest('button[data-close-demand]'); if (!b) return;
+    e.preventDefault();
+    if (!confirm('Close this demand? It will stop matching new sellers.')) return;
+    try { await send('DELETE', `/api/demand/${encodeURIComponent(b.dataset.closeDemand)}`, {}); toast('Demand closed'); loadMine(); } catch (err) { toast(err.message); }
   }
   async function loadMatches(el) {
     try {
@@ -249,16 +257,39 @@
     const r = new FormData($('#board-form')).get('r');
     try {
       const { data } = await getJSON(`/api/officer/board?r=${encodeURIComponent(r)}`, { cache: false });
-      const head = `<tr><th>Crop</th>${data.m.map((c) => `<th>${esc(marketName(c))}</th>`).join('')}</tr>`;
-      const rows = data.rows.map((row) => `<tr><td>${esc(cropName(row.c))}</td>${data.m.map((c) => { const p = row.p[c]; return p ? `<td title="${dayToDate(p.d)}">${kwacha(p.p)} <small class="${p.t > 0 ? 'up' : p.t < 0 ? 'down' : 'muted'}">${pct(p.t)}</small></td>` : '<td class="muted">-</td>'; }).join('')}</tr>`).join('');
-      $('#board').innerHTML = `<table class="grid small"><thead>${head}</thead><tbody>${rows}</tbody></table><p class="muted small">K per 50 kg; hover a price for its date.</p>`;
+      const head = `<tr><th>Crop</th>${data.m.map((c) => `<th>${esc(marketName(c))}</th>`).join('')}<th>Open supply</th></tr>`;
+      const rows = data.rows.map((row) => `<tr><td>${esc(cropName(row.c))}</td>${data.m.map((c) => { const p = row.p[c]; return p ? `<td title="${dayToDate(p.d)}">${kwacha(p.p)} <small class="${p.t > 0 ? 'up' : p.t < 0 ? 'down' : 'muted'}">${pct(p.t)}</small></td>` : '<td class="muted">-</td>'; }).join('')}<td>${row.s ? row.s.toLocaleString() + ' kg' : '<span class="muted">-</span>'}</td></tr>`).join('');
+      $('#board').innerHTML = `<table class="grid small"><thead>${head}</thead><tbody>${rows}</tbody></table><p class="muted small">K per 50 kg; hover a price for its date. Open supply = active farmer listings in the province.</p>`;
     } catch (err) { $('#board').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
   }
   const formJSON = (form, extra = {}) => ({ ...Object.fromEntries(new FormData(form)), ...extra });
-  async function registerFarmer(e) { e.preventDefault(); if (await submit('/api/farmers', formJSON(e.target), 'Farmer registered')) e.target.reset(); }
+  async function loadFarmers() {
+    try {
+      const { data } = await getJSON('/api/officer/farmers', { cache: false });
+      const cropOpts = REF.c.map(([c, n]) => `<option value="${esc(c)}">${esc(n)}</option>`).join('');
+      $('#farmers').innerHTML = data.length ? data.map((f) => `<div class="farmer" data-pid="${esc(f.pid)}">
+        <h4>${esc(f.name || 'Unnamed farmer')} <small class="muted">${esc(f.phone)} · ${esc(marketName(f.m))}</small></h4>
+        <b class="small">Listings</b><ul class="small">${f.listings.map((l) => `<li>${l.q.toLocaleString()} kg ${esc(cropName(l.c))} from ${esc(l.f)} <button class="ghost danger" data-remove-pk="${esc(l.pk)}" data-remove-sk="${esc(l.sk)}">Cancel</button></li>`).join('') || '<li class="muted">None</li>'}</ul>
+        <b class="small">Price alerts</b><ul class="small">${f.alerts.map((a) => `<li>${esc(cropName(a.c))} ${a.dir === 'up' ? 'above' : 'below'} K${bagK(a.thr)}/50kg at ${esc(marketName(a.m))} <button class="ghost danger" data-remove-pk="${esc(a.pk)}" data-remove-sk="${esc(a.sk)}">Remove</button></li>`).join('') || '<li class="muted">None</li>'}</ul>
+        <form class="row add-alert"><label>Alert crop <select name="c">${cropOpts}</select></label><label>When <select name="dir"><option value="up">above</option><option value="down">below</option></select></label><label>K per 50 kg <input name="k" type="number" min="1" required></label><button type="submit" class="ghost">Add alert</button></form>
+      </div>`).join('') : '<p class="muted">You have not registered any farmers yet.</p>';
+    } catch (err) { $('#farmers').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
+  }
+  async function onFarmersClick(e) {
+    const b = e.target.closest('button[data-remove-pk]'); if (!b) return;
+    const pid = b.closest('.farmer').dataset.pid;
+    try { await send('POST', `/api/officer/farmers/${encodeURIComponent(pid)}/remove`, { pk: b.dataset.removePk, sk: b.dataset.removeSk }); toast('Removed'); loadFarmers(); showBoard(); } catch (err) { toast(err.message); }
+  }
+  async function onFarmerAlert(e) {
+    if (!e.target.classList.contains('add-alert')) return;
+    e.preventDefault();
+    const pid = e.target.closest('.farmer').dataset.pid, f = formJSON(e.target);
+    try { await send('POST', `/api/officer/farmers/${encodeURIComponent(pid)}/alerts`, { c: f.c, dir: f.dir, k: Number(f.k) }); toast('Alert set - the farmer gets an SMS when it triggers'); loadFarmers(); } catch (err) { toast(err.message); }
+  }
+  async function registerFarmer(e) { e.preventDefault(); if (await submit('/api/farmers', formJSON(e.target), 'Farmer registered')) { e.target.reset(); loadFarmers(); } }
   async function listCrop(e) {
     e.preventDefault(); const b = formJSON(e.target); b.q = Number(b.q); if (!b.from) delete b.from;
-    if (await submit('/api/listings', b, 'Listed - buyers nearby will be matched')) e.target.reset();
+    if (await submit('/api/listings', b, 'Listed - buyers nearby will be matched')) { e.target.reset(); setTimeout(() => { loadFarmers(); showBoard(); }, 800); }
   }
   async function fieldPrice(e) {
     e.preventDefault(); const b = formJSON(e.target); const body = { c: b.c, m: b.m, p: perKg(b.pk) }; if (b.d) body.d = b.d;
@@ -321,6 +352,14 @@
   }
   function saveUnit(e) { e.preventDefault(); const f = formJSON(e.target); ADM.doc.units[f.label.trim().toLowerCase()] = Number(f.kg); saveCatalog('Unit saved'); e.target.reset(); }
 
+  async function loadOverview() {
+    const { data } = await getJSON('/api/admin/overview', { cache: false });
+    const t = data.total || {};
+    const cards = [['farmers', 'Farmers'], ['listings', 'Listings'], ['demands', 'Demands'], ['matches', 'Matches'], ['alerts', 'Alerts set'], ['alerts_sent', 'Alerts sent'], ['sms', 'SMS'], ['field_reports', 'Field reports'], ['ingestion_runs', 'Ingestion runs'], ['price_changes', 'Price changes']];
+    $('#adm-totals').innerHTML = cards.map(([k, l]) => `<div class="card"><small>${l}</small><b>${(t[k] || 0).toLocaleString()}</b></div>`).join('');
+    const cols = ['farmers', 'listings', 'demands', 'matches', 'alerts', 'alerts_sent', 'sms', 'field_reports', 'price_changes'];
+    $('#adm-days').innerHTML = data.days.map((d) => `<tr><td>${esc(d.day)}</td>${cols.map((c) => `<td>${d[c] || 0}</td>`).join('')}</tr>`).join('');
+  }
   async function loadSources() {
     const { data } = await getJSON('/api/admin/sources', { cache: false });
     ADM.sources = data; ADM.sources.doc.sources = ADM.sources.doc.sources || [];
@@ -370,7 +409,7 @@
   function selectSub(id) {
     $$('.subtabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.sub === id)));
     $$('#admin .sub').forEach((s) => (s.hidden = s.id !== id));
-    const load = { 'adm-markets': loadCatalog, 'adm-crops': loadCatalog, 'adm-sources': loadSources, 'adm-users': loadUsers }[id];
+    const load = { 'adm-overview': loadOverview, 'adm-markets': loadCatalog, 'adm-crops': loadCatalog, 'adm-sources': loadSources, 'adm-users': loadUsers }[id];
     load().catch((err) => toast(err.message));
   }
 
@@ -380,7 +419,7 @@
     $$('main > .panel').forEach((p) => (p.hidden = p.id !== name));
     if (name === 'trends' && !$('#chart').innerHTML) showTrends();
     if (name === 'buy') loadMine();
-    if (name === 'officer' && !$('#board').innerHTML) showBoard();
+    if (name === 'officer') { if (!$('#board').innerHTML) showBoard(); loadFarmers(); }
     if (name === 'admin') selectSub($('.subtabs button[aria-selected=true]').dataset.sub);
   }
   function renderAuth() {
@@ -388,6 +427,7 @@
     $('#auth').textContent = c ? 'Sign out' : 'Sign in';
     $('#who').textContent = c ? `${c.email || 'signed in'} (${g.join(', ') || 'no role yet'})` : 'not signed in';
     $$('.tabs button[data-role]').forEach((b) => (b.hidden = !(g.includes(b.dataset.role) || g.includes('admins'))));
+    $('#pending').hidden = !(c && !g.length);
     const current = $('.tabs button[aria-selected=true]');
     if (current && current.hidden) selectTab('prices');
   }
@@ -409,12 +449,20 @@
     on('#adm-source-form', addSource); on('#adm-ingest-form', runIngestion); on('#adm-user-form', inviteUser);
     $('#adm-markets').addEventListener('click', onCatalogClick); $('#adm-crops').addEventListener('click', onCatalogClick);
     $('#adm-sources').addEventListener('click', onSourceClick); $('#adm-users').addEventListener('change', onRoleChange);
+    $('#mine').addEventListener('click', closeDemand);
+    $('#farmers').addEventListener('click', onFarmersClick); $('#farmers').addEventListener('submit', onFarmerAlert);
     outbox.save(outbox.all());
     await finishLogin().catch(() => toast('Sign-in failed'));
     renderAuth();
     try { await loadRef(); await showPrices(); } catch { $('#price-meta').textContent = 'Offline and no saved data yet.'; }
     flush();
-    if ('serviceWorker' in navigator && !CFG.mockAuth) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator) {
+      if (CFG.mockAuth) {
+        // Local development: remove any service worker (and its caches) left by earlier versions.
+        navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister())).catch(() => {});
+        if (window.caches) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
+      } else navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
   }
   init();
 })();
