@@ -18,6 +18,7 @@ ignore = ["S101", "S311", "S608", "B008", "SIM105"]
 "scripts/**" = ["S603", "S607", "S105"]
 # URL opened is a fixed https:// endpoint or validated to start with https://
 "shared/agricommon/sms.py" = ["S310"]
+"shared/agricommon/weather.py" = ["S310"]
 "services/ingestion/ingestion_app.py" = ["S310"]
 
 [tool.ruff.lint.isort]
