@@ -231,6 +231,12 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length).decode() if length else None
         headers = dict(self.headers.items())
+        if url.path == "/sw.js":
+            # Replace any service worker cached by an earlier version with one that unregisters itself.
+            kill = (b"self.addEventListener('install',()=>self.skipWaiting());"
+                    b"self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(k=>Promise.all(k.map(c=>caches.delete(c))))"
+                    b".then(()=>self.registration.unregister()).then(()=>self.clients.matchAll()).then(cs=>cs.forEach(c=>c.navigate(c.url)))));")
+            return self._send(200, kill, "application/javascript", {"Cache-Control": "no-store"})
         if url.path == "/config.js":
             cfg = {"env": "local", "region": REGION, "mockAuth": True, "simulator": True}
             return self._send(200, f"window.AGRI={json.dumps(cfg)};".encode(), "application/javascript", {"Cache-Control": "no-store"})
@@ -276,6 +282,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):  # noqa: N802
         self._dispatch("PUT")
+
+    def do_DELETE(self):  # noqa: N802
+        self._dispatch("DELETE")
 
     def log_message(self, fmt, *args):  # quieter console: API calls only
         if any(p in self.path for p in ("/api/", "/ussd", "/sms", "/analytics/")):
