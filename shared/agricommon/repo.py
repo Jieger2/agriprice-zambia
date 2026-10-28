@@ -10,10 +10,14 @@
   RESUME#<pid>               LAST                            last USSD path for resume (TTL 180 s)
   SERIES#<crop>#<province>   ALL                             cached monthly series (analytics)
   SOURCE#<sourceId>          WATERMARK                       ingestion high-water mark
+  CONFIG#<name>              CURRENT                         admin-managed catalog / price sources (JSON document)
+  MATCH#<demandId>           <supply SK>                     supply matched to a buyer demand (TTL 30 d)
+  SMSOUT#<phone>             <ts>#<n>                        mock SMS outbox (SMS_MODE=outbox, TTL 7 d)
 """
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterable
 from decimal import Decimal
@@ -105,11 +109,14 @@ def upsert_price(crop: str, market: str, ngwee_per_kg: int, obs_date: str, provi
 
 
 # ---------- supply / demand ----------
-def put_supply(cell: str, crop: str, pid: str, phone: str, qty_kg: int, market: str, lat: float, lon: float) -> dict:
+def put_supply(cell: str, crop: str, pid: str, phone: str, qty_kg: int, market: str, lat: float, lon: float,
+               unit: str = "kg", available_from: str | None = None) -> dict:
+    """A farmer listing (FR2). q is always kilograms; `unit` records how the farmer counted it (kg or 50 kg bags)."""
     ts = now()
     item = {
         "PK": f"SUPPLY#{cell}", "SK": f"{crop}#{ts}#{pid}", "crop": crop, "pid": pid, "phone": phone,
-        "q": qty_kg, "market": market, "lat": Decimal(str(lat)), "lon": Decimal(str(lon)), "ts": ts, "ttl": ts + LISTING_TTL,
+        "q": qty_kg, "unit": unit, "from": available_from or time.strftime("%Y-%m-%d", time.gmtime(ts)),
+        "market": market, "lat": Decimal(str(lat)), "lon": Decimal(str(lon)), "ts": ts, "ttl": ts + LISTING_TTL,
     }
     _table().put_item(Item=item)
     return _clean(item)
@@ -218,3 +225,53 @@ def get_watermark(source_id: str) -> str:
 
 def set_watermark(source_id: str, day: str) -> None:
     _table().put_item(Item={"PK": f"SOURCE#{source_id}", "SK": "WATERMARK", "d": day, "updated": now()})
+
+
+# ---------- admin configuration (FR10) ----------
+def get_config(name: str) -> dict | None:
+    item = _table().get_item(Key={"PK": f"CONFIG#{name}", "SK": "CURRENT"}).get("Item")
+    return json.loads(item["doc"]) if item else None
+
+
+def put_config(name: str, doc: dict, by: str) -> None:
+    """Stored as a JSON string: keeps floats (coordinates, kg factors) exact and the item schema-free."""
+    _table().put_item(Item={"PK": f"CONFIG#{name}", "SK": "CURRENT", "doc": json.dumps(doc, separators=(",", ":")), "by": by, "updated": now()})
+
+
+# ---------- matches (FR5) ----------
+def put_match(demand: dict, listing: dict, km: float) -> bool:
+    """Record a demand/listing pair once. Returns False if it already existed.
+
+    Both sides of a pair can raise an event (ListingCreated and DemandPosted arriving close together,
+    or an SQS redelivery); the conditional write makes notification exactly-once per pair.
+    """
+    try:
+        _table().put_item(
+            Item={
+                "PK": f"MATCH#{demand['id']}", "SK": listing["SK"], "owner": demand["owner"], "crop": listing["crop"],
+                "q": listing["q"], "market": listing["market"], "km": Decimal(str(round(km, 1))), "phone": listing["phone"],
+                "from": listing.get("from", ""), "ts": now(), "ttl": now() + LISTING_TTL,
+            },
+            ConditionExpression="attribute_not_exists(PK)",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def matches_for(demand_id: str) -> list[dict]:
+    resp = _table().query(KeyConditionExpression=Key("PK").eq(f"MATCH#{demand_id}"), Limit=100)
+    return [_clean(i) for i in resp.get("Items", [])]
+
+
+# ---------- mock SMS outbox (SMS_MODE=outbox) ----------
+def put_outbox(phone: str, body: str) -> None:
+    ts = time.time()
+    _table().put_item(Item={"PK": f"SMSOUT#{phone}", "SK": f"{ts:.6f}", "body": body, "ts": int(ts), "ttl": int(ts) + 7 * 86400})
+
+
+def outbox(phone: str, limit: int = 30) -> list[dict]:
+    resp = _table().query(KeyConditionExpression=Key("PK").eq(f"SMSOUT#{phone}"), ScanIndexForward=False, Limit=limit)
+    return [{"body": i["body"], "ts": int(i["ts"])} for i in resp.get("Items", [])]
