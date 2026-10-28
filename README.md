@@ -24,11 +24,11 @@ All six Lambda services run in private subnets across two Availability Zones ─
 | `shared/agricommon/` | Shared domain library (geohash, byte-budget encoders, GSM-7 text, i18n, DynamoDB access, SMS client), packaged as a Lambda layer **inside each stack** so services stay independent |
 | `infra/` | `bootstrap` (GitHub OIDC + deploy roles), `network` (2-AZ VPC, fck-nat), `data` (DynamoDB, S3, Glue/Athena, SQS, EventBridge, Cognito, CloudTrail), `web` (CloudFront + S3), `observability` (dashboard), `budget` |
 | `web/` | 2G-friendly progressive web app (~45 KB in total, no framework, offline outbox) |
-| `tests/unit/` | 96 unit tests with moto, about 95% coverage (CI gate: 60%) |
+| `tests/unit/` | 105 unit tests with moto, about 96% coverage (CI gate: 60%) |
 | `tests/smoke/` | Post-deploy smoke tests |
 | `load/` | k6 load tests for the auto-scaling and latency demonstrations |
 | `scripts/` | `deploy.py` (cross-platform deploy), `local_server.py` (run everything locally), `ussd_cli.py` (phone simulator), `make_sample_data.py` |
-| `docs/` | Architecture, security and IAM justification, SLOs, runbooks, cost, demo script |
+| `docs/` | **Stakeholders and use cases (`use-cases.md`)**, architecture, security and IAM justification, SLOs, runbooks, cost, demo script |
 
 ## Run it locally (no AWS account needed)
 

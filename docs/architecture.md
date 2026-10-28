@@ -39,15 +39,19 @@ The nightly refresh produces 3 monthly forecasts (Holt-Winters) and 4 weekly for
 - Events carry **keys only**, never phone numbers. Consumers re-read the item.
 - Consumers are idempotent. Alerts takes a conditional `ALERTLOG` write before sending and releases it if the send fails, which also caps alerts at one SMS per farmer, crop and day.
 
+## Stakeholders
+
+Every actor (farmer, buyer, extension officer, administrator, public visitor, price sources, SMS gateway, scheduler), its use cases, entity links and the role matrix are catalogued in [`use-cases.md`](use-cases.md).
+
 ## Data model (DynamoDB single table)
 
 | Entity | PK | SK | Notes |
 |---|---|---|---|
-| Farmer | `FARMER#<pid>` | `PROFILE` | `pid` = HMAC-SHA256(phone, pepper)[:20] |
+| Farmer | `FARMER#<pid>` | `PROFILE` | `pid` = HMAC-SHA256(phone, pepper)[:20]; `GSI1PK=OFFICER#<sub>` when an officer registered them |
 | Current price | `PRICE#<crop>#<market>` | `CURRENT` | conditional update: only newer observations win |
-| Listing (supply) | `SUPPLY#<geohash3>` | `<crop>#<ts>#<pid>` | TTL 30 days |
-| Demand | `DEMAND#<geohash3>` | `<crop>#<ts>#<id>` | TTL 30 days; `GSI1PK=OWNER#<sub>` for "my demand" |
-| Alert | `ALERT#<crop>#<market>` | `<pid>#<dir>#<threshold>` | |
+| Listing (supply) | `SUPPLY#<geohash3>` | `<crop>#<ts>#<pid>` | TTL 30 days; `GSI1PK=FARMERITEMS#<pid>` (USSD "My account", officer "My farmers") |
+| Demand | `DEMAND#<geohash3>` | `<crop>#<ts>#<id>` | TTL 30 days; `GSI1PK=OWNER#<sub>` (web) or `OWNER#ussd-<pid>` (USSD option 7) for "my demand" |
+| Alert | `ALERT#<crop>#<market>` | `<pid>#<dir>#<threshold>` | `GSI1PK=FARMERITEMS#<pid>` |
 | Alert log | `ALERTLOG#<pid>#<crop>` | `<date>` | TTL 2 days |
 | USSD session / resume | `SESSION#<id>` / `RESUME#<pid>` | `STATE` / `LAST` | TTL 180 s: the stateless tier |
 | Analytics cache | `SERIES#<crop>#<province>` | `ALL` | rebuilt nightly |
@@ -55,6 +59,7 @@ The nightly refresh produces 3 monthly forecasts (Holt-Winters) and 4 weekly for
 | Match | `MATCH#<demandId>` | supply SK | written once per pair; TTL 30 days |
 | Mock SMS outbox | `SMSOUT#<phone>` | timestamp | `SMS_MODE=outbox` only; TTL 7 days |
 | Watermark | `SOURCE#<id>` | `WATERMARK` | prevents re-ingesting rows |
+| Activity counters | `STATS#<yyyy-mm-dd>` / `STATS#ALL` | `COUNT` | atomic `ADD` on every business write; Admin overview |
 
 **Why DynamoDB rather than RDS/PostGIS:** every access pattern is a key lookup or a prefix query. It is Multi-AZ by default, scales to zero cost when idle, and its auto-scaling is easy to demonstrate. Multi-AZ RDS would cost two always-on instances.
 

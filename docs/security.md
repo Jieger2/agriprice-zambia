@@ -20,10 +20,12 @@
 | Role | Action(s) | Resource / condition | Why |
 |---|---|---|---|
 | ussd-gateway | dynamodb Get/BatchGet/Put/Update/DeleteItem | table; `LeadingKeys` ∈ FARMER#, SESSION#, RESUME#, PRICE#, SUPPLY#, ALERT# | read prices; persist session, resume point, registration, listing, alert; delete profile on STOP |
-| ussd-gateway | events:PutEvents | project event bus | publish `ListingCreated` |
+| ussd-gateway | dynamodb on `DEMAND#`, `CONFIG#`, `SMSOUT#`, `STATS#` keys; Query GSI1 `FARMERITEMS#`, `OWNER#ussd-*` | table | USSD buyers (option 7), "My account" (option 6), activity counters |
+| ussd-gateway | events:PutEvents | project event bus | publish `ListingCreated`, `DemandPosted` |
 | ussd-gateway | ssm:GetParameter | `/agriprice/<env>/at/*`, `/privacy/pepper` | callback token, SMS credentials, pseudonymisation key |
 | listings-api | dynamodb Get/BatchGet/Put/Update/Query | table; `LeadingKeys` ∈ FARMER#, PRICE#, SUPPLY#, DEMAND# | public prices, register farmers, listings, demand, nearby supply |
-| listings-api | dynamodb:Query | GSI1; `LeadingKeys` ∈ OWNER# | "my demand" |
+| listings-api | dynamodb:Query | GSI1; `LeadingKeys` ∈ OWNER#, OFFICER#, FARMERITEMS# | "my demand", officer "My farmers" |
+| listings-api | dynamodb:DeleteItem; Put/Update on `ALERT#`, `STATS#` | table | close demand, officer cancels a farmer's listing or alert, officer sets alerts, counters (officer ownership checked in code) |
 | listings-api | dynamodb Get/Put/Update/DeleteItem | idempotency table | Idempotency-Key records |
 | listings-api | events:PutEvents | event bus | `ListingCreated`, `DemandPosted` |
 | listings-api | s3:PutObject | `lake/inbox/field/*` | officer field price reports |
@@ -44,6 +46,7 @@
 | matching / alerts | sqs Receive/Delete/GetQueueAttributes | own queue (added by SAM) | event source mapping |
 | alerts | dynamodb:Query | `LeadingKeys` ∈ ALERT# | subscriptions for a changed price |
 | alerts | dynamodb Put/DeleteItem | `LeadingKeys` ∈ ALERTLOG# | dedupe and daily cap |
+| matching, alerts, ingestion | dynamodb:UpdateItem on `STATS#*` | table | Admin overview counters |
 | analytics-api | dynamodb Get/PutItem | `LeadingKeys` ∈ SERIES# | series cache |
 | analytics-api | athena Start/Get/GetResults/Stop | project workgroup | nightly aggregation |
 | analytics-api | glue Get* (read only) | database, `curated_prices` | query planning |
