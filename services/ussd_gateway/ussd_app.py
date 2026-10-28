@@ -18,8 +18,9 @@ import base64
 import hmac
 import ipaddress
 import os
+import re
 import urllib.parse
-from datetime import date
+from datetime import date, timedelta
 
 from aws_lambda_powertools.metrics import MetricUnit
 
@@ -30,6 +31,8 @@ logger, tracer, metrics = obs.tools("ussd-gateway")
 DEFAULT_MARKETS = ["LSK", "NDL", "CPT"]
 MAX_QTY_KG = 1_000_000
 MAX_PRICE_K = 100_000
+UNITS = {"1": {"code": "kg", "label": "kg", "kg": 1}, "2": {"code": "bag50", "label": "50kg bags", "kg": 50}}
+AVAILABLE_IN_DAYS = {"1": 0, "2": 14, "3": 30}
 
 
 # ---------------------------------------------------------------- helpers
@@ -59,6 +62,14 @@ def _authorised(event: dict) -> bool:
             return False
         return any(ip in ipaddress.ip_network(c) for c in cidrs)
     return True
+
+
+def clean_name(raw: str) -> str:
+    """Names typed on a keypad: letters, spaces, apostrophes and hyphens only; '0' skips."""
+    raw = raw.strip()
+    if raw in ("", "0"):
+        return ""
+    return re.sub(r"[^A-Za-z' -]", "", raw)[:40].strip().title()
 
 
 def crop_menu(lang: str) -> str:
@@ -121,44 +132,61 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         hdr = i18n.t("prices_hdr", lang, crop=crop["name"].upper()) + f" {stamp}"
         return "END", "\n".join([hdr, *rows, i18n.t("sms_hint", lang, code=crop["short"].upper())])
 
-    if top in ("2", "3") and not (farmer and farmer.get("market")):
+    home = catalog.markets().get((farmer or {}).get("market", ""))
+    if top in ("2", "3") and not home:
         return "END", i18n.t("need_register", lang)
 
-    if top == "2":  # sell my crop
+    if top == "2":  # sell my crop (FR2): crop -> unit -> quantity -> available-from -> confirm
         if n == 1:
             return "CON", crop_menu(lang)
         crop = pick(crops, parts[1])
         if not crop:
             return "END", i18n.t("invalid", lang)
         if n == 2:
-            return "CON", i18n.t("qty", lang, crop=crop["name"])
-        if not parts[2].isdigit() or not 0 < int(parts[2]) <= MAX_QTY_KG:
+            return "CON", i18n.t("unit_menu", lang, crop=crop["name"])
+        unit = UNITS.get(parts[2])
+        if not unit:
             return "END", i18n.t("invalid", lang)
-        qty, market = int(parts[2]), catalog.markets()[farmer["market"]]
         if n == 3:
-            return "CON", i18n.t("confirm_sell", lang, qty=qty, crop=crop["name"], market=market.name)
-        if parts[3] != "1":
+            return "CON", i18n.t("qty", lang, unit=unit["label"], crop=crop["name"])
+        if not parts[3].isdigit() or not 0 < int(parts[3]) * unit["kg"] <= MAX_QTY_KG:
+            return "END", i18n.t("invalid", lang)
+        qty = int(parts[3]) * unit["kg"]
+        if n == 4:
+            return "CON", i18n.t("avail_menu", lang)
+        if parts[4] not in AVAILABLE_IN_DAYS:
+            return "END", i18n.t("invalid", lang)
+        available = date.today() + timedelta(days=AVAILABLE_IN_DAYS[parts[4]])
+        if n == 5:
+            return "CON", i18n.t("confirm_sell", lang, qty=qty, crop=crop["name"], market=home.name, when=available.strftime("%d%b"))
+        if parts[5] != "1":
             return "END", i18n.t("cancelled", lang)
-        item = repo.put_supply(geo.cell(market.lat, market.lon), crop["code"], ctx["pid"], ctx["phone"], qty, market.code, market.lat, market.lon)
-        bus.publish_event("ListingCreated", {"pk": f"SUPPLY#{geo.cell(market.lat, market.lon)}", "sk": item["SK"]}, ctx["cid"])
+        cell = geo.cell(home.lat, home.lon)
+        item = repo.put_supply(cell, crop["code"], ctx["pid"], ctx["phone"], qty, home.code, home.lat, home.lon, unit["code"], available.isoformat())
+        bus.publish_event("ListingCreated", {"pk": f"SUPPLY#{cell}", "sk": item["SK"]}, ctx["cid"])
         metrics.add_metric(name="ListingsCreated", unit=MetricUnit.Count, value=1)
         return "END", i18n.t("listed", lang, qty=qty, crop=crop["name"])
 
-    if top == "3":  # price alerts
+    if top == "3":  # price alerts (FR7): crop -> direction -> price
         if n == 1:
             return "CON", crop_menu(lang)
         crop = pick(crops, parts[1])
         if not crop:
             return "END", i18n.t("invalid", lang)
-        market = catalog.markets()[farmer["market"]]
         if n == 2:
-            return "CON", i18n.t("alert_amt", lang, crop=crop["name"], market=market.name)
-        if not parts[2].isdigit() or not 0 < int(parts[2]) <= MAX_PRICE_K:
+            return "CON", i18n.t("alert_dir", lang, crop=crop["name"], market=home.name)
+        direction = {"1": "up", "2": "down"}.get(parts[2])
+        if not direction:
             return "END", i18n.t("invalid", lang)
-        amount_k = int(parts[2])
+        if n == 3:
+            return "CON", i18n.t("alert_amt", lang)
+        if not parts[3].isdigit() or not 0 < int(parts[3]) <= MAX_PRICE_K:
+            return "END", i18n.t("invalid", lang)
+        amount_k = int(parts[3])
         threshold = round(amount_k * 100 / codec.BAG_KG)  # ngwee per kg
-        repo.put_alert(crop["code"], market.code, ctx["pid"], ctx["phone"], threshold, "up", lang)
-        return "END", i18n.t("alert_set", lang, crop=crop["name"], amt=amount_k, market=market.name)
+        repo.put_alert(crop["code"], home.code, ctx["pid"], ctx["phone"], threshold, direction, lang)
+        word = i18n.t("above" if direction == "up" else "below", lang)
+        return "END", i18n.t("alert_set", lang, crop=crop["name"], dir=word, amt=amount_k, market=home.name)
 
     if top == "4":  # language
         if n == 1:
@@ -185,9 +213,12 @@ def route(parts: list[str], ctx: dict) -> tuple[str, str]:
         market = pick(mkts, parts[2])
         if not market:
             return "END", i18n.t("invalid", lang)
-        repo.put_farmer(ctx["pid"], ctx["phone"], market=market.code, lang=lang)
+        if n == 3:
+            return "CON", i18n.t("ask_name", lang)
+        name = clean_name(parts[3])
+        repo.put_farmer(ctx["pid"], ctx["phone"], market=market.code, lang=lang, name=name)
         metrics.add_metric(name="FarmersRegistered", unit=MetricUnit.Count, value=1)
-        return "END", i18n.t("registered", lang, market=market.name)
+        return "END", i18n.t("registered", lang, name=(name + " ") if name else "", market=market.name)
 
     return "END", i18n.t("invalid", lang)
 
