@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgriPrice - Feature phone simulator</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root{--bg:#f7f5ef;--fg:#1d2a1f;--muted:#5d6b5f;--accent:#2f5d34;--line:#d9d4c7}
+  *{box-sizing:border-box} body{margin:0;font:15px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+  header{background:var(--accent);color:#fff;padding:.7rem 1rem;display:flex;gap:1rem;align-items:center}
+  header h1{font-size:1.05rem;margin:0;flex:1} header a{color:#fff}
+  main{display:flex;flex-wrap:wrap;gap:2rem;justify-content:center;padding:1.5rem 1rem}
+  .phone{width:250px;background:#262b27;border-radius:28px;padding:18px 16px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .screen{background:#c8d8b0;color:#11160f;font:13px/1.35 "Courier New",monospace;height:220px;border-radius:6px;padding:8px;white-space:pre-wrap;overflow:auto;border:3px solid #1b1f1c}
+  .screen .meta{font-size:10px;color:#4a5a3e;border-top:1px dashed #6f8160;margin-top:6px;padding-top:3px}
+  .input{display:flex;gap:6px;margin:12px 0 10px}
+  .input input{flex:1;font:16px monospace;padding:6px;border-radius:6px;border:0}
+  .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+  .keys button,.ctl button{font:600 16px system-ui;padding:9px 0;border-radius:10px;border:0;background:#454c46;color:#eee;cursor:pointer}
+  .ctl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:8px}
+  .ctl .call{background:#2e7d32}.ctl .end{background:#b23a2a}
+  .side{max-width:24rem;flex:1 1 18rem}
+  .side h2{font-size:1rem;margin:.2rem 0 .5rem}
+  label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:.6rem}
+  label input{display:block;width:100%;font:inherit;padding:.4rem;border:1px solid var(--line);border-radius:.4rem;margin-top:.2rem}
+  .sms{background:#fff;border:1px solid var(--line);border-radius:.5rem;padding:.5rem .7rem;margin:.4rem 0}
+  .sms small{color:var(--muted);display:block}
+  .tip{font-size:.8rem;color:var(--muted)}
+  code{background:#ece8dc;padding:0 .25rem;border-radius:.2rem}
+</style>
+</head>
+<body>
+<header><h1>Feature-phone simulator <small>(stands in for Africa's Talking USSD + SMS)</small></h1><a href="/">Back to web app</a></header>
+<main>
+  <div class="phone">
+    <div class="screen" id="screen">Press the green button to dial *384*1#</div>
+    <form class="input" id="send"><input id="entry" inputmode="numeric" autocomplete="off" aria-label="Reply"><button>OK</button></form>
+    <div class="ctl"><button class="call" id="dial" type="button">Dial *384*1#</button><button class="end" id="hang" type="button">End</button></div>
+    <div class="keys" id="keys"></div>
+  </div>
+  <div class="side">
+    <h2>Phone</h2>
+    <label>Simulated number <input id="phone" value="+260977123456"></label>
+    <p class="tip">Use different numbers to play farmer and buyer. Sign in on the web app as a <b>buyer</b> with the phone shown in the sign-in box to receive buyer SMS.</p>
+    <h2>SMS inbox <small class="tip">(mock provider - refreshes every 3 s)</small></h2>
+    <form id="sms-send" class="input" style="margin:0 0 .5rem"><input id="sms-text" placeholder="PRICE MAIZE" style="font:14px system-ui"><button>Send SMS</button></form>
+    <div id="inbox"><p class="tip">No messages yet.</p></div>
+    <h2>Try this</h2>
+    <p class="tip">1. Dial, choose <code>5</code> to register (province, market, name).<br>2. Dial again, <code>1</code> then <code>1</code> for maize prices.<br>3. <code>2</code> to sell: crop, unit, quantity, date, confirm. Buyers with matching demand get an SMS, and so do you.<br>4. <code>3</code> to set an alert; an admin can trigger it with <b>Run ingestion now</b> after adding a field price.</p>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  let session = null, inputs = [];
+  const screen = $('#screen');
+  const esc = (v) => String(v).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  async function ussd() {
+    const body = new URLSearchParams({ sessionId: session, serviceCode: '*384*1#', phoneNumber: $('#phone').value, text: inputs.join('*') });
+    const r = await fetch('/ussd', { method: 'POST', body });
+    const text = await r.text();
+    const kind = text.slice(0, 3), msg = text.slice(4);
+    screen.innerHTML = esc(msg) + `<div class="meta">${kind} · ${text.length}/182 chars</div>`;
+    if (kind === 'END') { session = null; inputs = []; }
+    $('#entry').focus();
+    setTimeout(loadInbox, 600);
+  }
+  $('#dial').onclick = () => { session = 'sim-' + Date.now(); inputs = []; ussd(); };
+  $('#hang').onclick = () => { session = null; inputs = []; screen.textContent = 'Call ended. Dial again within 3 minutes to resume where you left off.'; };
+  $('#send').onsubmit = (e) => { e.preventDefault(); const v = $('#entry').value.trim(); if (!session || !v) return; inputs.push(v); $('#entry').value = ''; ussd(); };
+  const keys = $('#keys');
+  ['1','2','3','4','5','6','7','8','9','*','0','#'].forEach((k) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = k; b.onclick = () => { $('#entry').value += k; }; keys.appendChild(b); });
+  $('#sms-send').onsubmit = async (e) => {
+    e.preventDefault();
+    await fetch('/sms', { method: 'POST', body: new URLSearchParams({ from: $('#phone').value, to: '384', text: $('#sms-text').value }) });
+    $('#sms-text').value = ''; setTimeout(loadInbox, 400);
+  };
+  async function loadInbox() {
+    try {
+      const r = await fetch('/dev/outbox?phone=' + encodeURIComponent($('#phone').value));
+      const rows = await r.json();
+      $('#inbox').innerHTML = rows.length ? rows.map((m) => `<div class="sms">${esc(m.body)}<small>${new Date(m.ts * 1000).toLocaleTimeString()} · ${m.body.length}/160 chars</small></div>`).join('') : '<p class="tip">No messages yet.</p>';
+    } catch { /* server stopped */ }
+  }
+  $('#phone').onchange = loadInbox;
+  setInterval(loadInbox, 3000); loadInbox();
+})();
+</script>
+</body>
+</html>

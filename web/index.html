@@ -13,6 +13,7 @@
 <body>
 <header class="top">
   <h1>AgriPrice <span>Zambia</span></h1>
+  <a id="sim-link" class="link" href="simulator.html" hidden>Phone simulator</a>
   <span id="net" class="pill" aria-live="polite"></span>
   <button id="auth" class="link" type="button">Sign in</button>
 </header>
@@ -22,13 +23,15 @@
   <button role="tab" data-tab="trends">Trends</button>
   <button role="tab" data-tab="buy" data-role="buyers">Buy</button>
   <button role="tab" data-tab="officer" data-role="officers">Officer</button>
+  <button role="tab" data-tab="admin" data-role="admins">Admin</button>
 </nav>
 
 <main>
+  <!-- ============================================================ Prices (public, FR3) -->
   <section id="prices" class="panel">
     <form id="price-form" class="row">
       <label>Crop <select name="c" class="crops"></select></label>
-      <label>Near <select name="near" class="markets"><option value="">All markets</option></select></label>
+      <label>Near <select name="near" class="markets-any"></select></label>
       <button type="submit">Show</button>
     </form>
     <p id="price-meta" class="muted"></p>
@@ -36,58 +39,177 @@
     <p class="muted small">Feature phone? Dial the USSD code or SMS <b>PRICE MAIZE</b>.</p>
   </section>
 
+  <!-- ============================================================ Trends (public, FR8 + FR12) -->
   <section id="trends" class="panel" hidden>
     <form id="trend-form" class="row">
       <label>Crop <select name="c" class="crops"></select></label>
-      <label>Province <select name="r" class="provinces"><option value="ZM">All Zambia</option></select></label>
+      <label>Province <select name="r" class="provinces-zm"></select></label>
       <button type="submit">Show</button>
     </form>
     <div id="chart" class="chart" role="img" aria-label="Monthly price trend"></div>
+    <h3>Next 4 weeks <small class="muted">(forecast, K per 50 kg)</small></h3>
+    <div id="weekly" class="cards"></div>
+    <p id="wx" class="muted small"></p>
     <h3>Seasonal index <small class="muted">(100 = yearly average)</small></h3>
     <div id="season" class="season"></div>
   </section>
 
+  <!-- ============================================================ Buy (buyers, FR4 + FR5) -->
   <section id="buy" class="panel" hidden>
-    <h2>Post demand</h2>
-    <form id="demand-form" class="stack">
-      <label>Crop <select name="c" class="crops"></select></label>
-      <label>Quantity (kg) <input name="q" type="number" min="1" required></label>
-      <label>Max price (K per 50 kg) <input name="pk" type="number" min="1" required></label>
-      <label>Collection point <select name="m" class="markets" required></select></label>
-      <label>Radius (km) <input name="r" type="number" min="1" max="150" value="50"></label>
-      <button type="submit">Post demand</button>
-    </form>
-    <h3>My demand</h3>
-    <ul id="mine" class="list"></ul>
+    <div class="two">
+      <div>
+        <h2>Post demand</h2>
+        <form id="demand-form" class="stack">
+          <label>Crop <select name="c" class="crops"></select></label>
+          <label>Quantity (kg) <input name="q" type="number" min="1" required></label>
+          <label>Max price (K per 50 kg) <input name="pk" type="number" min="1" required></label>
+          <label>Collection point <select name="m" class="markets" required></select></label>
+          <label>Radius (km) <input name="r" type="number" min="1" max="150" value="50"></label>
+          <button type="submit">Post demand</button>
+        </form>
+      </div>
+      <div>
+        <h2>Find supply now</h2>
+        <form id="supply-form" class="stack">
+          <label>Crop <select name="c" class="crops"></select></label>
+          <label>Near <select name="m" class="markets" required></select></label>
+          <label>Radius (km) <input name="r" type="number" min="1" max="150" value="80"></label>
+          <button type="submit">Search</button>
+        </form>
+        <table id="supply-table" class="grid small" hidden><thead><tr><th>Qty</th><th>Market</th><th>km</th><th>From</th><th>Phone</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <h2>My demand <small class="muted">(matched sellers appear automatically)</small></h2>
+    <div id="mine"></div>
   </section>
 
+  <!-- ============================================================ Officer (officers, FR1/FR2/FR6 + regional dashboard) -->
   <section id="officer" class="panel" hidden>
-    <h2>Register farmer</h2>
-    <form id="farmer-form" class="stack">
-      <label>Phone <input name="phone" inputmode="tel" required placeholder="0977..."></label>
-      <label>Name <input name="name" maxlength="60"></label>
-      <label>Market <select name="m" class="markets" required></select></label>
-      <label>Language <select name="lang"><option value="en">English</option><option value="bem">Bemba</option><option value="nya">Nyanja</option></select></label>
-      <button type="submit">Register</button>
+    <h2>Regional dashboard</h2>
+    <form id="board-form" class="row">
+      <label>Province <select name="r" class="provinces"></select></label>
+      <button type="submit">Show</button>
     </form>
-    <h2>List crop for farmer</h2>
-    <form id="listing-form" class="stack">
-      <label>Farmer phone <input name="phone" inputmode="tel" required></label>
-      <label>Crop <select name="c" class="crops"></select></label>
-      <label>Quantity (kg) <input name="q" type="number" min="1" required></label>
-      <button type="submit">List</button>
-    </form>
+    <div id="board" class="scroll"></div>
+    <div class="two">
+      <div>
+        <h2>Register farmer</h2>
+        <form id="farmer-form" class="stack">
+          <label>Phone <input name="phone" inputmode="tel" required placeholder="0977..."></label>
+          <label>Name <input name="name" maxlength="60"></label>
+          <label>Market <select name="m" class="markets" required></select></label>
+          <label>Language <select name="lang"><option value="en">English</option><option value="bem">Bemba</option><option value="nya">Nyanja</option></select></label>
+          <button type="submit">Register</button>
+        </form>
+      </div>
+      <div>
+        <h2>List crop for farmer</h2>
+        <form id="listing-form" class="stack">
+          <label>Farmer phone <input name="phone" inputmode="tel" required></label>
+          <label>Crop <select name="c" class="crops"></select></label>
+          <label>Quantity <span class="inline"><input name="q" type="number" min="1" required><select name="u"><option value="kg">kg</option><option value="bag50">50 kg bags</option></select></span></label>
+          <label>Available from <input name="from" type="date"></label>
+          <button type="submit">List</button>
+        </form>
+      </div>
+    </div>
     <h2>Field price report</h2>
-    <form id="field-form" class="stack">
+    <form id="field-form" class="row">
       <label>Crop <select name="c" class="crops"></select></label>
       <label>Market <select name="m" class="markets" required></select></label>
-      <label>Price (K per 50 kg) <input name="pk" type="number" min="1" required></label>
+      <label>K per 50 kg <input name="pk" type="number" min="1" required></label>
       <label>Date <input name="d" type="date"></label>
       <button type="submit">Submit</button>
     </form>
   </section>
+
+  <!-- ============================================================ Admin (admins, FR10) -->
+  <section id="admin" class="panel" hidden>
+    <nav class="subtabs">
+      <button data-sub="adm-markets" aria-selected="true">Markets</button>
+      <button data-sub="adm-crops">Crops &amp; units</button>
+      <button data-sub="adm-sources">Price sources</button>
+      <button data-sub="adm-users">Users &amp; roles</button>
+    </nav>
+
+    <div id="adm-markets" class="sub">
+      <table class="grid small"><thead><tr><th>Code</th><th>Name</th><th>Province</th><th>Lat, Lon</th><th></th></tr></thead><tbody id="adm-market-rows"></tbody></table>
+      <h3>Add or update a market</h3>
+      <form id="adm-market-form" class="row">
+        <label>Code <input name="code" maxlength="3" required pattern="[A-Za-z]{3}" placeholder="NKD"></label>
+        <label>Name <input name="name" required maxlength="30"></label>
+        <label>Province <select name="province" class="provinces"></select></label>
+        <label>Latitude <input name="lat" type="number" step="0.0001" required placeholder="-9.33"></label>
+        <label>Longitude <input name="lon" type="number" step="0.0001" required placeholder="32.75"></label>
+        <button type="submit">Save market</button>
+      </form>
+      <p class="muted small" id="adm-disabled-markets"></p>
+    </div>
+
+    <div id="adm-crops" class="sub" hidden>
+      <table class="grid small"><thead><tr><th>Code</th><th>Name</th><th>USSD label</th><th>Source names matched</th><th></th></tr></thead><tbody id="adm-crop-rows"></tbody></table>
+      <h3>Add or update a crop</h3>
+      <form id="adm-crop-form" class="row">
+        <label>Code <input name="code" maxlength="3" required pattern="[A-Za-z]{3}" placeholder="SRG"></label>
+        <label>Name <input name="name" required maxlength="30" placeholder="Sorghum"></label>
+        <label>USSD label <input name="short" maxlength="7" placeholder="Sorghum"></label>
+        <label>Match words <input name="match" placeholder="sorghum, sorghum (red)"></label>
+        <button type="submit">Save crop</button>
+      </form>
+      <p class="muted small" id="adm-disabled-crops"></p>
+      <h3>Unit conversions</h3>
+      <p class="muted small">Prices from sources are converted to ngwee per kg. Add units the sources use, e.g. "Tin (5 L)" = 4.5 kg.</p>
+      <ul id="adm-unit-rows" class="list"></ul>
+      <form id="adm-unit-form" class="row">
+        <label>Unit label <input name="label" required placeholder="Tin (5 L)"></label>
+        <label>Kilograms <input name="kg" type="number" step="0.01" min="0.01" max="1000" required></label>
+        <button type="submit">Add unit</button>
+      </form>
+    </div>
+
+    <div id="adm-sources" class="sub" hidden>
+      <table class="grid small"><thead><tr><th>ID</th><th>Type</th><th>Location</th><th>Status</th><th></th></tr></thead><tbody id="adm-source-rows"></tbody></table>
+      <h3>Add a WFP / HDX CSV source</h3>
+      <form id="adm-source-form" class="row">
+        <label>ID <input name="id" required pattern="[a-z0-9_\-]{2,30}" placeholder="wfp_hdx"></label>
+        <label class="grow">HTTPS CSV link <input name="url" type="url" required placeholder="https://data.humdata.org/.../wfp_food_prices_zmb.csv"></label>
+        <label>Label <input name="label" placeholder="WFP Zambia"></label>
+        <button type="submit">Add source</button>
+      </form>
+      <h3>Run ingestion now</h3>
+      <form id="adm-ingest-form" class="row">
+        <label>Look back (days) <input name="lookback_days" type="number" min="1" max="3650" value="730"></label>
+        <button type="submit">Run now</button>
+      </form>
+      <p id="adm-ingest-status" class="muted small"></p>
+    </div>
+
+    <div id="adm-users" class="sub" hidden>
+      <table class="grid small"><thead><tr><th>Email</th><th>Phone</th><th>Status</th><th>buyers</th><th>officers</th><th>admins</th></tr></thead><tbody id="adm-user-rows"></tbody></table>
+      <h3>Invite a user</h3>
+      <form id="adm-user-form" class="row">
+        <label>Email <input name="email" type="email" required></label>
+        <label>Phone <input name="phone" inputmode="tel" required placeholder="0977..."></label>
+        <label>Role <select name="group"><option value="buyers">Buyer</option><option value="officers">Extension officer</option><option value="admins">Administrator</option></select></label>
+        <button type="submit">Invite</button>
+      </form>
+    </div>
+  </section>
+
   <p id="toast" class="toast" role="status" hidden></p>
 </main>
+
+<dialog id="mock-login">
+  <form method="dialog" id="mock-login-form" class="stack">
+    <h2>Sign in (local demo)</h2>
+    <p class="muted small">Cognito is simulated locally. Pick a role to try its pages.</p>
+    <label>Role <select name="role"><option value="buyers">Buyer</option><option value="officers">Extension officer</option><option value="admins">Administrator</option></select></label>
+    <label>Email <input name="email" type="email" value="demo@agriprice.local"></label>
+    <label>Phone (receives SMS) <input name="phone" value="+260966000100"></label>
+    <div class="row"><button type="submit" value="ok">Sign in</button><button type="submit" value="cancel" formnovalidate class="ghost">Cancel</button></div>
+  </form>
+</dialog>
+
 <footer class="muted small">Outbox: <span id="outbox">0</span> pending · <span id="who"></span></footer>
 <script src="config.js"></script>
 <script src="app.js"></script>
