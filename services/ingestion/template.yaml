@@ -59,7 +59,7 @@ Resources:
       Description: Fetch, normalise and store price data; publish changes to SQS
       CodeUri: .
       Handler: ingestion_app.handler
-      Timeout: 300
+      Timeout: 900   # a full-history backfill curates in sequential Athena chunks
       MemorySize: 1024
       LoggingConfig: { LogGroup: !Ref LogGroup }
       AutoPublishAlias: live
