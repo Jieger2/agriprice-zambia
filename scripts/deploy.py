@@ -42,7 +42,6 @@ from botocore.exceptions import ClientError
 ROOT = Path(__file__).resolve().parents[1]
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "eu-north-1"
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "agrizambia5@gmail.com")
-FCK_NAT_OWNER = "568608671756"
 SERVICES = ["ussd_gateway", "listings_api", "ingestion", "matching", "alerts", "analytics_api"]
 ORDER = ["network", "data", *SERVICES, "web", "observability"]
 
@@ -134,13 +133,19 @@ def ensure_secrets(env: str, rotate: bool = False) -> bool:
 
 
 # ---------------------------------------------------------------- deploy
-def fck_nat_ami() -> str:
-    ec2 = boto3.client("ec2", region_name=REGION)
-    images = ec2.describe_images(Owners=[FCK_NAT_OWNER], Filters=[{"Name": "name", "Values": ["fck-nat-al2023-*-arm64-ebs"]}, {"Name": "architecture", "Values": ["arm64"]}])["Images"]
-    if not images:
-        log("WARNING: no fck-nat AMI in this Region - deploying without NAT (ingestion from the internet and SMS will not work)")
-        return ""
-    return sorted(images, key=lambda i: i["CreationDate"])[-1]["ImageId"]
+def clear_failed_network(env: str) -> None:
+    """A network stack that failed or got stuck creating must be deleted before it can be created again."""
+    name = stack_name(env, "network")
+    cfn = boto3.client("cloudformation", region_name=REGION)
+    try:
+        status = cfn.describe_stacks(StackName=name)["Stacks"][0]["StackStatus"]
+    except ClientError:
+        return
+    if status in ("ROLLBACK_COMPLETE", "ROLLBACK_FAILED", "CREATE_FAILED", "CREATE_IN_PROGRESS", "DELETE_FAILED"):
+        log(f"{name} is {status}: deleting it so it can be created again (takes a few minutes)...")
+        cfn.delete_stack(StackName=name)
+        cfn.get_waiter("stack_delete_complete").wait(StackName=name, WaiterConfig={"Delay": 15, "MaxAttempts": 120})
+        log(f"{name} deleted")
 
 
 def sources_json() -> str:
@@ -193,7 +198,11 @@ def deploy(env: str, only: list[str] | None, sms_mode: str | None, chaos: str = 
             continue
         name = stack_name(env, part)
         if part == "network":
-            sam_deploy("infra/network.yaml", name, {"Env": env, "FckNatAmiId": fck_nat_ami()}, boot)
+            clear_failed_network(env)
+            params = {"Env": env}
+            if os.environ.get("NAT_INSTANCE_TYPE"):
+                params["NatInstanceType"] = os.environ["NAT_INSTANCE_TYPE"]
+            sam_deploy("infra/network.yaml", name, params, boot)
         elif part == "data":
             first_env = not outputs(stack_name("dev" if env == "prod" else "prod", "data"))
             sam_deploy("infra/data.yaml", name, {

@@ -85,7 +85,7 @@ The system deploys to **eu-north-1 (Stockholm)**. The thesis preferred af-south-
 ## Network
 
 - A VPC across two AZs, with two private subnets (Lambda) and two public subnets (NAT only).
-- **fck-nat** runs on a t4g.nano in an Auto Scaling group. A static ENI carries the private routes, so a replacement instance takes over without route changes.
+- **NAT instance** (Amazon Linux 2023 configured like fck-nat) runs on a t4g.micro in an Auto Scaling group. Both the instance type and the image are free-tier eligible, which AWS Free plan accounts require. A static ENI carries the private routes, so a replacement instance takes over without route changes.
 - S3 and DynamoDB gateway endpoints are free, so the busiest traffic never passes through the NAT.
 - The Lambda security group allows HTTPS egress only and no ingress.
 - **Trade-off:** the NAT is a single instance in AZ-a. The farmer price-lookup path (API Gateway → Lambda → DynamoDB through the gateway endpoint) does **not** depend on it, so price lookups survive the loss of either AZ. Outbound internet (ingestion sources, SMS, SSM, SQS, EventBridge) pauses until the ASG replaces the instance, and that work is queued and retried.

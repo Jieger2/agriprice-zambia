@@ -22,7 +22,7 @@ All six Lambda services run in private subnets across two Availability Zones ─
 |---|---|
 | `services/<name>/` | Six independently deployable services, each with its own SAM template, IAM role, alarms and log group |
 | `shared/agricommon/` | Shared domain library (geohash, byte-budget encoders, GSM-7 text, i18n, DynamoDB access, SMS client), packaged as a Lambda layer **inside each stack** so services stay independent |
-| `infra/` | `bootstrap` (GitHub OIDC + deploy roles), `network` (2-AZ VPC, fck-nat), `data` (DynamoDB, S3, Glue/Athena, SQS, EventBridge, Cognito, CloudTrail), `web` (CloudFront + S3), `observability` (dashboard), `budget` |
+| `infra/` | `bootstrap` (GitHub OIDC + deploy roles), `network` (2-AZ VPC, NAT instance), `data` (DynamoDB, S3, Glue/Athena, SQS, EventBridge, Cognito, CloudTrail), `web` (CloudFront + S3), `observability` (dashboard), `budget` |
 | `web/` | 2G-friendly progressive web app (~45 KB in total, no framework, offline outbox) |
 | `tests/unit/` | 105 unit tests with moto, about 96% coverage (CI gate: 60%) |
 | `tests/smoke/` | Post-deploy smoke tests |
@@ -109,7 +109,7 @@ The `seed` source loads the synthetic CSV so every feature can be demonstrated. 
 - **Serverless instead of containers.** There is no idle cost, and Lambda satisfies "≥3 independently deployable services". See `docs/architecture.md`.
 - **SQS and EventBridge instead of Kinesis.** Both are explicitly allowed by the brief, and Kinesis bills per shard-hour even when idle.
 - **Athena `INSERT INTO` as the ETL step instead of Glue jobs.** Glue Catalog tables are declared in IaC, so no crawlers are needed.
-- **fck-nat instead of NAT Gateways.** This saves about $66 a month, and S3 and DynamoDB traffic goes through free gateway endpoints.
+- **A NAT instance (t4g.micro, Amazon Linux 2023, fck-nat style) instead of NAT Gateways.** This saves about $63 a month, and S3 and DynamoDB traffic goes through free gateway endpoints.
 - **Every byte justified.** USSD screens are capped at 182 characters and SMS at 160 GSM-7 characters, both enforced by contract tests. A compact price record is 48 bytes, compared with 175 bytes as verbose JSON. Responses use ETag/304, and the web app needs no chart library.
 - **Privacy.** Phone numbers are pseudonymised with a keyed hash in keys and logs. Farmers can text `STOP` to delete their profile (Zambia Data Protection Act No. 3 of 2021).
 

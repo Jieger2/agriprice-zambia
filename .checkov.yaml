@@ -8,7 +8,7 @@ skip-check:
   - CKV_AWS_28   # PITR is enabled for prod; dev and the idempotency table are rebuildable
   - CKV_AWS_21   # versioning is on for lake/trail; web and artifact buckets are rebuilt from Git
   - CKV_AWS_119  # DynamoDB uses the AWS managed KMS key (no $1/month per customer-managed key)
-  - CKV_AWS_88   # the fck-nat instance must have a public IP to perform NAT
+  - CKV_AWS_88   # the NAT instance must have a public IP to perform NAT
   - CKV_AWS_86   # CloudFront access logs: not needed at pilot scale (cost)
   - CKV_AWS_68   # WAF (~$5+/month) replaced by API Gateway throttling + Cognito
   - CKV_AWS_35   # CloudTrail logs use SSE-S3 rather than a customer-managed KMS key (cost)

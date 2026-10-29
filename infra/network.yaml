@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   AgriPrice Zambia - network. VPC across two Availability Zones with private
   subnets for every Lambda function, free S3/DynamoDB gateway endpoints, and a
-  self-healing fck-nat instance instead of managed NAT Gateways (~$66/month saved).
+  self-healing NAT instance instead of managed NAT Gateways (~$63/month saved).
 
 Parameters:
   Env:
@@ -16,16 +16,17 @@ Parameters:
     AllowedValues: ["true", "false"]
     Default: "true"
     Description: Outbound internet for ingestion (price sources), SMS, SSM, SQS, EventBridge, X-Ray.
-  FckNatAmiId:
-    Type: String
-    Default: ""
-    Description: fck-nat arm64 AMI for this Region (resolved automatically by scripts/deploy.py).
+  NatAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 arm64 (free-tier eligible), resolved from the public SSM parameter.
   NatInstanceType:
     Type: String
-    Default: t4g.nano
+    Default: t4g.micro
+    Description: Must be free-tier eligible on AWS Free plan accounts (t4g.micro, t4g.small, t3.micro, ...).
 
 Conditions:
-  UseNat: !And [!Equals [!Ref EnableNat, "true"], !Not [!Equals [!Ref FckNatAmiId, ""]]]
+  UseNat: !Equals [!Ref EnableNat, "true"]
 
 Resources:
   Vpc:
@@ -124,14 +125,15 @@ Resources:
       SecurityGroupEgress:
         - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: "HTTPS to AWS APIs, price sources and SMS gateway" }
 
-  # ---------------- fck-nat (https://fck-nat.dev): one t4g.nano in an Auto Scaling group.
+  # ---------------- NAT instance: one t4g.micro (Amazon Linux 2023) in an Auto Scaling group,
+  # configured like fck-nat (https://fck-nat.dev) by the user data below.
   # A static ENI carries the private route; if the instance dies the ASG replaces
   # it and the new instance re-attaches the ENI, so routes never change.
   NatSg:
     Type: AWS::EC2::SecurityGroup
     Condition: UseNat
     Properties:
-      GroupDescription: fck-nat - accepts traffic from the VPC only
+      GroupDescription: NAT instance - accepts traffic from the VPC only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - { IpProtocol: "-1", CidrIp: !Ref VpcCidr, Description: NAT traffic from private subnets }
@@ -144,7 +146,7 @@ Resources:
       SubnetId: !Ref PublicSubnetA
       GroupSet: [!Ref NatSg]
       SourceDestCheck: false
-      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-fck-nat" }]
+      Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-nat" }]
   NatRole:
     Type: AWS::IAM::Role
     Condition: UseNat
@@ -158,7 +160,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [ec2:AttachNetworkInterface, ec2:ModifyNetworkInterfaceAttribute]
+                Action: [ec2:AttachNetworkInterface, ec2:ModifyNetworkInterfaceAttribute, ec2:ModifyInstanceAttribute]
                 Resource:
                   - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/${NatEni}"
                   - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
@@ -171,7 +173,7 @@ Resources:
     Condition: UseNat
     Properties:
       LaunchTemplateData:
-        ImageId: !Ref FckNatAmiId
+        ImageId: !Ref NatAmiId
         InstanceType: !Ref NatInstanceType
         IamInstanceProfile: { Arn: !GetAtt NatProfile.Arn }
         MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
@@ -186,11 +188,26 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            echo "eni_id=${NatEni}" >> /etc/fck-nat.conf
-            service fck-nat restart
+            # NAT on Amazon Linux 2023: take over the static ENI, forward and masquerade VPC traffic.
+            set -uxo pipefail
+            T=$(curl -sX PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+            IID=$(curl -s -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id)
+            sysctl -w net.ipv4.ip_forward=1
+            echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/90-nat.conf
+            for f in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$f"; done
+            echo "net.ipv4.conf.all.rp_filter=0" >> /etc/sysctl.d/90-nat.conf
+            aws ec2 modify-instance-attribute --region ${AWS::Region} --instance-id "$IID" --no-source-dest-check
+            for i in $(seq 1 30); do
+              aws ec2 attach-network-interface --region ${AWS::Region} --instance-id "$IID" --network-interface-id ${NatEni} --device-index 1 && break
+              sleep 10   # the previous instance may still be releasing the ENI
+            done
+            dnf install -y iptables-nft
+            OUT=$(ip route show default | awk '{print $5; exit}')
+            iptables -t nat -A POSTROUTING -o "$OUT" -s ${VpcCidr} -j MASQUERADE
+            iptables -P FORWARD ACCEPT
         TagSpecifications:
           - ResourceType: instance
-            Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-fck-nat" }]
+            Tags: [{ Key: Name, Value: !Sub "agriprice-${Env}-nat" }]
   NatAsg:
     Type: AWS::AutoScaling::AutoScalingGroup
     Condition: UseNat
