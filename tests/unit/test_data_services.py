@@ -50,7 +50,7 @@ def test_run_source_from_s3_with_watermark(ingestion, aws):
     s3.put_object(Bucket="agriprice-test-lake", Key="seed/wfp.csv", Body=CSV.encode())
     src = {"id": "seed", "type": "wfp_csv_s3", "key": "seed/wfp.csv"}
     res = ingestion.run_source(src, "agriprice-test-lake", "2026-10-27", "run1", 3650)
-    assert res == {"source": "seed", "rows": 4, "changes": 2}
+    assert res.pop("months") and res == {"source": "seed", "rows": 4, "changes": 2}
     assert repo.get_price("MZE", "NDL")["p"] == 540
     raw = s3.list_objects_v2(Bucket="agriprice-test-lake", Prefix="raw/ingest_date=2026-10-27/")["Contents"]
     line = gzip.decompress(s3.get_object(Bucket="agriprice-test-lake", Key=raw[0]["Key"])["Body"].read()).splitlines()[0]
@@ -186,3 +186,28 @@ def test_run_athena_polls_and_parses(analytics, monkeypatch):
     monkeypatch.setattr(analytics.boto3, "client", lambda name: FakeAthena())
     monkeypatch.setattr(analytics.time, "sleep", lambda s: None)
     assert analytics.run_athena("SELECT 1") == [{"a": "1", "b": "2"}]
+
+
+def test_backfill_curates_in_chunks_under_athena_partition_limit(aws, monkeypatch):
+    """HIVE_TOO_MANY_OPEN_PARTITIONS: one INSERT may write <= 100 partitions (province x month)."""
+    import ingestion_app
+
+    sqls, states = [], iter(["SUCCEEDED"] * 50)
+
+    class FakeAthena:
+        def start_query_execution(self, QueryString, WorkGroup):
+            sqls.append(QueryString)
+            return {"QueryExecutionId": f"q{len(sqls)}"}
+
+        def get_query_execution(self, QueryExecutionId):
+            return {"QueryExecution": {"Status": {"State": next(states)}}}
+
+    monkeypatch.setattr(ingestion_app.boto3, "client", lambda name: FakeAthena())
+    months = {f"{y}-{m:02d}" for y in range(2003, 2025) for m in range(1, 13)}  # 264 months
+    out = ingestion_app.curate("2026-10-29", "run1", months, None)
+    assert len(sqls) == 30 and all(r["state"] == "SUCCEEDED" for r in out)
+    assert all(s.count("'20") <= ingestion_app.MONTHS_PER_QUERY + 1 for s in sqls)  # 9 months + the ingest date
+    assert out[0]["months"] == "2003-01..2003-09"
+    sqls.clear()
+    assert ingestion_app.curate("2026-10-29", "run2", {"2026-09", "2026-10"}, None) == [{"athena_query": "q1"}]
+    assert "IN (" not in sqls[0]  # normal runs: one query, no month filter

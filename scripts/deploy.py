@@ -305,13 +305,20 @@ def wait_for_athena(query_id: str) -> bool:
     return False
 
 
-def run_pipeline(env: str) -> None:
-    lam = boto3.client("lambda", region_name=REGION)
+def run_pipeline(env: str, reprocess: str | None = None) -> None:
+    from botocore.config import Config
+
+    if reprocess:
+        table = outputs(stack_name(env, "data")).get("TableName")
+        boto3.resource("dynamodb", region_name=REGION).Table(table).delete_item(Key={"PK": f"SOURCE#{reprocess}", "SK": "WATERMARK"})
+        log(f"cleared the '{reprocess}' watermark: its rows will be read and curated again")
+    # a full-history backfill runs for minutes: wait for it, and never retry (a retry would start a second run)
+    lam = boto3.client("lambda", region_name=REGION, config=Config(read_timeout=900, connect_timeout=30, retries={"max_attempts": 0}))
     for fn, payload in ((f"agriprice-{env}-ingestion", {"lookback_days": 9000}), (f"agriprice-{env}-analytics-api", {"action": "refresh"})):
-        log(f"invoking {fn}")
+        log(f"invoking {fn} (a first full-history load can take 2-5 minutes)" if fn.endswith("ingestion") else f"invoking {fn}")
         resp = lam.invoke(FunctionName=f"{fn}:live", Payload=json.dumps(payload).encode())
         body = resp["Payload"].read().decode()
-        log(f"  -> {resp.get('FunctionError', 'OK')} {body[:300]}")
+        log(f"  -> {resp.get('FunctionError', 'OK')} {body[:600]}")
         if fn.endswith("ingestion"):
             try:
                 qids = [r["athena_query"] for r in json.loads(body).get("results", []) if isinstance(r, dict) and r.get("athena_query")]
@@ -520,6 +527,7 @@ def main() -> None:
     ap.add_argument("--rate", default="0.5", help="demo-rollback: fraction of requests that fail")
     ap.add_argument("--email", help="add-user: the person's email address")
     ap.add_argument("--file", help="load-wfp: use a CSV you downloaded instead of fetching it from HDX")
+    ap.add_argument("--reprocess", help="run-pipeline: re-read and re-curate one source from the start (e.g. wfp)")
     ap.add_argument("--role", default="admins", choices=["admins", "officers", "buyers"], help="add-user: role group")
     a = ap.parse_args()
     if a.command == "doctor":
@@ -541,7 +549,7 @@ def main() -> None:
     elif a.command == "outputs":
         show_outputs(a.env)
     elif a.command == "run-pipeline":
-        run_pipeline(a.env)
+        run_pipeline(a.env, a.reprocess)
     elif a.command == "demo-rollback":
         log("Deploying a deliberately faulty USSD gateway version with a 10% canary.")
         log("While it deploys, generate traffic: k6 run load/ussd_load.js (see docs/demo-script.md).")

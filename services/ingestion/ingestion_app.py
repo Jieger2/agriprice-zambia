@@ -20,6 +20,7 @@ import gzip
 import io
 import json
 import os
+import time
 import urllib.request
 import uuid
 from collections.abc import Iterable, Iterator
@@ -165,14 +166,52 @@ def update_current(latest: dict[tuple[str, str], dict]) -> list[dict]:
     return changes
 
 
-def start_curation(ingest_day: str, run_id: str) -> str:
+# Athena INSERT INTO may write at most 100 partitions per query. curated_prices is partitioned by
+# province (10) x month, so a backfill is curated in chunks of 9 months (<= 90 partitions).
+MONTHS_PER_QUERY = 9
+
+
+def start_curation(ingest_day: str, run_id: str, months: list[str] | None = None) -> str:
     db, wg = os.environ["GLUE_DATABASE"], os.environ["ATHENA_WORKGROUP"]
     sql = (
         f'INSERT INTO "{db}"."curated_prices" '
         "SELECT DISTINCT CAST(obs_date AS date), commodity, market, price_ngwee_kg, source, province, substr(obs_date, 1, 7) "
         f'FROM "{db}"."raw_prices" WHERE ingest_date = \'{ingest_day}\' AND run_id = \'{run_id}\''
     )
+    if months:
+        sql += " AND substr(obs_date, 1, 7) IN (" + ", ".join(f"'{m}'" for m in months if len(m) == 7 and m[4] == "-") + ")"
     return boto3.client("athena").start_query_execution(QueryString=sql, WorkGroup=wg)["QueryExecutionId"]
+
+
+def wait_query(qid: str, deadline: float) -> str:
+    athena = boto3.client("athena")
+    while time.time() < deadline:
+        state = athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"]["Status"]["State"]
+        if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            return state
+        time.sleep(2)
+    return "RUNNING"
+
+
+def curate(ingest_day: str, run_id: str, months: set[str], context) -> list[dict]:
+    """One query for normal runs; sequential chunked queries for a large backfill."""
+    ordered = sorted(months)
+    chunks = [ordered[i:i + MONTHS_PER_QUERY] for i in range(0, len(ordered), MONTHS_PER_QUERY)]
+    if len(chunks) <= 1:
+        return [{"athena_query": start_curation(ingest_day, run_id)}]
+    out = []
+    remaining_ms = getattr(context, "get_remaining_time_in_millis", lambda: 600_000)
+    for i, chunk in enumerate(chunks):
+        if remaining_ms() < 30_000:
+            out.append({"curation_incomplete": f"{len(chunks) - i} of {len(chunks)} chunks not run (time limit)"})
+            break
+        qid = start_curation(ingest_day, run_id, chunk)
+        state = wait_query(qid, time.time() + remaining_ms() / 1000 - 20)
+        out.append({"athena_query": qid, "months": f"{chunk[0]}..{chunk[-1]}", "state": state})
+        if state == "FAILED":
+            break
+    logger.info("ingest.curation_chunks", extra={"chunks": len(chunks), "done": len(out)})
+    return out
 
 
 # ---------------------------------------------------------------- orchestration
@@ -192,7 +231,7 @@ def run_source(src: dict, bucket: str, ingest_day: str, run_id: str, lookback_da
         floor = (date.today() - timedelta(days=lookback_days)).isoformat()
         mark = max(repo.get_watermark(sid), floor)
         rows = [r for r in rows if r["obs_date"] > mark]
-    result = {"source": sid, "rows": len(rows), "changes": 0}
+    result = {"source": sid, "rows": len(rows), "changes": 0, "months": sorted({r["obs_date"][:7] for r in rows})}
     if rows:
         write_raw(bucket, rows, ingest_day, sid, run_id)
         changes = update_current(latest_per_key(rows))
@@ -221,10 +260,11 @@ def handler(event: dict, context) -> dict:
         admin_doc = None
     sources = source_config.effective(admin_doc)
     lookback = int((event or {}).get("lookback_days", DEFAULT_LOOKBACK_DAYS))
-    results, failures, total = [], 0, 0
+    results, failures, total, months = [], 0, 0, set()
     for src in sources:
         try:
             res = run_source(src, bucket, ingest_day, run_id, lookback)
+            months.update(res.pop("months", []))
             results.append(res)
             total += res["rows"]
             logger.info("ingest.source_done", extra=res)
@@ -235,7 +275,7 @@ def handler(event: dict, context) -> dict:
     repo.bump(ingestion_runs=1, ingested_rows=total, price_changes=sum(r.get("changes", 0) for r in results))
     metrics.add_metric(name="IngestionFailures", unit=MetricUnit.Count, value=failures)
     if total:
-        results.append({"athena_query": start_curation(ingest_day, run_id)})
+        results.extend(curate(ingest_day, run_id, months, context))
     if failures and failures == len(sources):
         raise RuntimeError("all ingestion sources failed")  # -> async retry, then DLQ + alarm
     return {"run_id": run_id, "results": results}
