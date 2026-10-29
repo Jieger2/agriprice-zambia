@@ -100,3 +100,5 @@ body.ribbon-open .ribbon{transform:none;visibility:visible}
 @media (prefers-color-scheme:dark){.top{background:#1f3d23}}
 .crop-price{white-space:nowrap}
 @media (min-width:40rem){.crop-pic{width:4.4rem;height:4.4rem}.crop-card{gap:.7rem}}
+.team li{display:flex;gap:.6rem;align-items:center}
+.face{flex:none;width:2.5rem;height:2.5rem;border-radius:50%;object-fit:cover;display:grid;place-items:center;background:var(--accent);color:#fff;font-weight:700;font-size:.85rem}
