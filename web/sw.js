@@ -1,6 +1,6 @@
 // Service worker: stale-while-revalidate app shell. API responses are handled by app.js (ETag + localStorage).
 // config.js is NEVER cached: it differs per environment (local emulator vs AWS) and a stale copy breaks sign-in.
-const SHELL = 'agriprice-shell-v4';
+const SHELL = 'agriprice-shell-v5';
 const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 const NEVER_CACHE = ['/config.js', '/sw.js'];
 

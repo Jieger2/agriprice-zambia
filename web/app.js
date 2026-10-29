@@ -417,13 +417,15 @@
 
   // ---------------------------------------------------------------- Home / landing
   // Team shown on the landing page. Edit here (and TEAM.md) when roles change.
+  // Photo: put a square JPEG at web/team/<github>.jpg (about 200x200 px, under 25 KB) and set photo: true.
   const TEAM = [
-    ['Idan Musama Mwaba', 'Team Lead & Cloud Architect'],
-    ['Benaiah Masase', 'DevOps & Security'],
-    ['Victor William Kangomu', 'Observability & Reliability'],
-    ['Jeriah Chikwanda', 'Backend API'],
-    ['Oliver Kakungu', 'Data & Analytics'],
-    ['Mwewa Chibu', 'Frontend, USSD & QA'],
+    { name: 'Idan Musama Mwaba', role: 'Team Lead & Cloud Architect', github: 'Jieger2' },
+    { name: 'Benaiah Masase', role: 'DevOps & Security', github: 'Benaiah09' },
+    { name: 'Victor William Kangomu', role: 'Observability & Reliability', github: 'victorwilliamkangomu-bot' },
+    { name: 'Jeriah Chikwanda', role: 'Backend API', github: 'Jedyn128' },
+    { name: 'Oliver Kakungu', role: 'Data & Analytics', github: 'oliverkakungu' },
+    { name: 'Mwewa Chibu', role: 'Frontend, USSD & QA', github: 'Mwewacs' },
+    { name: 'Kangwa Mupinga', role: 'Documentation & Stakeholder Liaison', github: 'kangwa1' },
   ];
   // Hand-drawn crop icons (inline SVG: a few hundred bytes each, nothing to download on 2G).
   const S = 'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"';
@@ -476,7 +478,10 @@
     const c = e.target.closest('button[data-crop]');
     if (c) { $('#price-form select[name=c]').value = c.dataset.crop; selectTab('prices'); showPrices(); }
   }
-  function renderTeam() { $('#team').innerHTML = TEAM.map(([n, r]) => `<li><b>${esc(n)}</b> <span class="muted">${esc(r)}</span></li>`).join(''); }
+  const initials = (n) => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  function renderTeam() {
+    $('#team').innerHTML = TEAM.map((m) => `<li>${m.photo ? `<img class="face" src="team/${esc(m.github.toLowerCase())}.jpg" alt="" width="40" height="40" loading="lazy">` : `<span class="face" aria-hidden="true">${esc(initials(m.name))}</span>`}<span><b>${esc(m.name)}</b><br><span class="muted">${esc(m.role)}</span></span></li>`).join('');
+  }
 
   // Ribbon (opened by the logo on every page)
   function setRibbon(open) {
