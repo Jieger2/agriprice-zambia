@@ -137,10 +137,10 @@ Resources:
                 Effect: Allow
                 Action: cloudfront:CreateInvalidation
                 Resource: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*"
-              - Sid: FindNatAmi
+              - Sid: ResolveNatAmi  # network.yaml resolves the Amazon Linux AMI from the public SSM parameter
                 Effect: Allow
-                Action: ec2:DescribeImages
-                Resource: "*"
+                Action: ssm:GetParameters
+                Resource: !Sub "arn:${AWS::Partition}:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"
               - Sid: ProjectSecrets  # deploy.py creates missing SecureString parameters (never reads them into logs)
                 Effect: Allow
                 Action: [ssm:GetParameter, ssm:PutParameter]

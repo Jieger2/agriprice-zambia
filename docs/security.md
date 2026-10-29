@@ -54,9 +54,9 @@
 | all functions | VPC ENI management, CloudWatch Logs, X-Ray (`AWSLambdaVPCAccessExecutionRole`, tracing policy added by SAM) | | required by Lambda in a VPC with tracing |
 | github-deploy | cloudformation:* | `agriprice-*` stacks only | drive deployments |
 | github-deploy | iam:PassRole | `agriprice-cfn-execution` only | CloudFormation acts with the execution role, never the CI identity |
-| github-deploy | s3 (artifacts, web, lake/seed), cloudfront:CreateInvalidation, ec2:DescribeImages, lambda:InvokeFunction `agriprice-*`, ssm Get/Put `/agriprice/*` | | upload artifacts, publish site, find the fck-nat AMI, post-deploy pipeline run, create missing secrets |
+| github-deploy | s3 (artifacts, web, lake/seed), cloudfront:CreateInvalidation, lambda:InvokeFunction `agriprice-*`, ssm Get/Put `/agriprice/*` | | upload artifacts, publish site, find the fck-nat AMI, post-deploy pipeline run, create missing secrets |
 | cfn-execution | PowerUserAccess + IAM restricted to `role/agriprice-*` | | CloudFormation must create many resource types; IAM is the escalation path, so it is fenced to project-named roles |
-| fck-nat instance | ec2:AttachNetworkInterface, ModifyNetworkInterfaceAttribute | the static NAT ENI | self-healing NAT |
+| NAT instance | ec2:AttachNetworkInterface, ModifyNetworkInterfaceAttribute, ModifyInstanceAttribute | the static NAT ENI; its own instance | self-healing NAT: take over the ENI, disable source/destination check |
 
 ## Accepted Checkov findings
 
