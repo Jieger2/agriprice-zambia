@@ -26,6 +26,7 @@ Environment variables (optional):
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import mimetypes
 import os
@@ -164,7 +165,8 @@ def sources_json() -> str:
     src = [{"id": "seed", "type": "wfp_csv_s3", "key": "seed/zambia_sample_prices.csv"}, {"id": "field", "type": "s3_inbox", "prefix": "inbox/field/"}]
     if os.environ.get("WFP_CSV_URL"):
         src.insert(0, {"id": "wfp_hdx", "type": "wfp_csv", "url": os.environ["WFP_CSV_URL"]})
-    return json.dumps(src, separators=(",", ":"))
+    # base64 without padding: survives the quote-stripping of sam.cmd on Windows and has no '='
+    return "b64:" + base64.urlsafe_b64encode(json.dumps(src, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
 def upload_seed(env: str) -> None:

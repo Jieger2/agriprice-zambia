@@ -7,6 +7,7 @@ CONFIG#sources and merged over the built-ins by `id` at every ingestion run.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -20,8 +21,18 @@ _ID = re.compile(r"^[a-z0-9_-]{2,30}$")
 
 
 def builtin() -> list[dict]:
-    raw = os.environ.get("SOURCES_JSON")
-    return json.loads(raw) if raw else [dict(s) for s in DEFAULTS]
+    """SOURCES_JSON is plain JSON, or "b64:<urlsafe base64 JSON>" as written by scripts/deploy.py.
+
+    Base64 is used because the SAM CLI on Windows runs through a .cmd wrapper that strips
+    double quotes from --parameter-overrides, which would corrupt plain JSON.
+    """
+    raw = (os.environ.get("SOURCES_JSON") or "").strip()
+    if not raw:
+        return [dict(s) for s in DEFAULTS]
+    if raw.startswith("b64:"):
+        enc = raw[4:]
+        raw = base64.urlsafe_b64decode(enc + "=" * (-len(enc) % 4)).decode()
+    return json.loads(raw)
 
 
 def validate(doc: dict) -> dict:
