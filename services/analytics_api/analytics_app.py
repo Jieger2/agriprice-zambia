@@ -140,7 +140,9 @@ AGG_SQL = """
 SELECT commodity, province, month,
        CAST(round(avg(price_ngwee_kg)) AS integer) AS avgp,
        min(price_ngwee_kg) AS minp, max(price_ngwee_kg) AS maxp, count(*) AS n
-FROM (SELECT DISTINCT obs_date, commodity, market, price_ngwee_kg, province, month FROM "{db}"."curated_prices")
+FROM (SELECT DISTINCT obs_date, commodity, market, price_ngwee_kg, province, month FROM "{db}"."curated_prices"
+      -- real sources replace the synthetic seed file as soon as any are present
+      WHERE source <> 'seed' OR NOT EXISTS (SELECT 1 FROM "{db}"."curated_prices" WHERE source <> 'seed'))
 GROUP BY commodity, province, month
 ORDER BY commodity, province, month
 """
