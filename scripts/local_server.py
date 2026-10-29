@@ -102,8 +102,8 @@ def setup_aws() -> None:
 
 
 # ---------------------------------------------------------------- emulated Athena (curation + nightly aggregation)
-def local_curation(ingest_day: str, run_id: str) -> str:
-    """Stand-in for the Athena INSERT INTO: copy this run's raw rows into the curated table."""
+def local_curation(ingest_day: str, run_id: str, months: list[str] | None = None) -> str:
+    """Stand-in for the Athena INSERT INTO: copy this run's raw rows (optionally only some months) into the curated table."""
     s3 = boto3.client("s3")
     listing = s3.list_objects_v2(Bucket="agriprice-local-lake", Prefix=f"raw/ingest_date={ingest_day}/")
     for obj in listing.get("Contents", []):
@@ -111,6 +111,8 @@ def local_curation(ingest_day: str, run_id: str) -> str:
             continue
         for line in gzip.decompress(s3.get_object(Bucket="agriprice-local-lake", Key=obj["Key"])["Body"].read()).splitlines():
             r = json.loads(line)
+            if months and r["obs_date"][:7] not in months:
+                continue
             CURATED[(r["obs_date"], r["commodity"], r["market"], r["price_ngwee_kg"])] = r
     return f"local-{run_id}"
 
@@ -305,6 +307,7 @@ def main() -> None:
     import listings_app
 
     ingestion_app.start_curation = local_curation
+    ingestion_app.wait_query = lambda qid, deadline: "SUCCEEDED"  # local curation finishes immediately
     analytics_app.run_athena = local_athena
 
     def run_now(payload: dict) -> str:  # Admin -> "Run ingestion now"
