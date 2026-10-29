@@ -141,6 +141,18 @@ def clear_failed_network(env: str) -> None:
         status = cfn.describe_stacks(StackName=name)["Stacks"][0]["StackStatus"]
     except ClientError:
         return
+    if status in ("DELETE_IN_PROGRESS", "ROLLBACK_IN_PROGRESS"):
+        log(f"{name} is {status}: waiting for AWS to finish (a few minutes)...")
+        waiter = "stack_delete_complete" if status == "DELETE_IN_PROGRESS" else "stack_rollback_complete"
+        try:
+            cfn.get_waiter(waiter).wait(StackName=name, WaiterConfig={"Delay": 15, "MaxAttempts": 120})
+        except Exception as exc:  # noqa: BLE001 - the waiter raises once the stack is gone; re-check below
+            log(f"  waiter ended: {type(exc).__name__}")
+        try:
+            status = cfn.describe_stacks(StackName=name)["Stacks"][0]["StackStatus"]
+        except ClientError:
+            log(f"{name} deleted")
+            return
     if status in ("ROLLBACK_COMPLETE", "ROLLBACK_FAILED", "CREATE_FAILED", "CREATE_IN_PROGRESS", "DELETE_FAILED"):
         log(f"{name} is {status}: deleting it so it can be created again (takes a few minutes)...")
         cfn.delete_stack(StackName=name)
