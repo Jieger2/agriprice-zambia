@@ -11,6 +11,7 @@ Usage:
   python scripts/deploy.py demo-rollback --env prod  # canary deploy of a faulty version (see docs/demo-script.md)
   python scripts/deploy.py add-user --env dev --email you@example.com --role admins   # invite the first admin
   python scripts/deploy.py doctor                    # check tools, credentials and Region before deploying
+  python scripts/deploy.py diagnose --env dev        # stack status, failure reasons, NAT launch attempts
   python scripts/deploy.py destroy --env dev
 
 Environment variables (optional):
@@ -335,6 +336,34 @@ def doctor() -> None:
         sys.exit(1)
 
 
+def diagnose(env: str) -> None:
+    """Everything needed to troubleshoot a deploy without the AWS console."""
+    cfn = boto3.client("cloudformation", region_name=REGION)
+    log(f"Region {REGION}, account {account_id()}")
+    names = ["agriprice-bootstrap", "agriprice-budget", *(stack_name(env, p) for p in ORDER)]
+    for name in names:
+        try:
+            st = cfn.describe_stacks(StackName=name)["Stacks"][0]
+        except ClientError:
+            print(f"  {name:38} not created")
+            continue
+        status = st["StackStatus"]
+        print(f"  {name:38} {status}  {st.get('StackStatusReason', '')}")
+        if not status.endswith("_COMPLETE") or "ROLLBACK" in status or "FAILED" in status:
+            events = cfn.describe_stack_events(StackName=name)["StackEvents"][:40]
+            for ev in events:
+                if "FAILED" in ev["ResourceStatus"] or "IN_PROGRESS" in ev["ResourceStatus"] and ev.get("ResourceStatusReason"):
+                    print(f"      {ev['Timestamp']:%H:%M:%S} {ev['LogicalResourceId']:24} {ev['ResourceStatus']:22} {ev.get('ResourceStatusReason', '')[:300]}")
+    asg = boto3.client("autoscaling", region_name=REGION)
+    groups = [g for g in asg.describe_auto_scaling_groups()["AutoScalingGroups"] if g["AutoScalingGroupName"].startswith(f"agriprice-{env}-network")]
+    for g in groups:
+        print(f"  NAT group {g['AutoScalingGroupName']}: {len(g['Instances'])} instance(s) {[i['LifecycleState'] for i in g['Instances']]}")
+        for a in asg.describe_scaling_activities(AutoScalingGroupName=g["AutoScalingGroupName"], MaxRecords=5)["Activities"]:
+            print(f"      {a['StartTime']:%H:%M:%S} {a['StatusCode']:12} {a.get('StatusMessage', '')[:400]}")
+    if not groups:
+        print("  NAT group: none found")
+
+
 def add_user(env: str, email: str, role: str) -> None:
     """Invite a web user (Cognito emails a temporary password) and put them in a role group."""
     pool = outputs(stack_name(env, "data")).get("UserPoolId")
@@ -353,7 +382,7 @@ def add_user(env: str, email: str, role: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["doctor", "bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "add-user", "demo-rollback", "destroy"])
+    ap.add_argument("command", choices=["doctor", "diagnose", "bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "add-user", "demo-rollback", "destroy"])
     ap.add_argument("--env", default="dev", choices=["dev", "prod"])
     ap.add_argument("--only", help="comma-separated parts: " + ",".join(ORDER))
     ap.add_argument("--sms-mode", choices=["log", "outbox", "sandbox", "live"])
@@ -364,6 +393,8 @@ def main() -> None:
     a = ap.parse_args()
     if a.command == "doctor":
         doctor()
+    elif a.command == "diagnose":
+        diagnose(a.env)
     elif a.command == "add-user":
         if not a.email:
             ap.error("add-user needs --email")
