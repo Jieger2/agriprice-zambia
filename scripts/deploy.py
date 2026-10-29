@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import mimetypes
 import os
@@ -161,6 +162,22 @@ def clear_failed_network(env: str) -> None:
         log(f"{name} deleted")
 
 
+def code_revision(part: str, params: dict[str, str]) -> str:
+    """Fingerprint of a service's code, the shared layer and its settings.
+
+    SAM publishes a new Lambda version (and moves the `live` alias) only when this changes;
+    without it, changes to shared code or parameter values never reached the alias.
+    """
+    h = hashlib.sha256()
+    for folder in (ROOT / "services" / part, ROOT / "shared"):
+        for f in sorted(folder.rglob("*")):
+            if f.is_file() and "__pycache__" not in f.parts and f.suffix != ".pyc":
+                h.update(f.relative_to(ROOT).as_posix().encode())
+                h.update(f.read_bytes().replace(b"\r\n", b"\n"))
+    h.update(json.dumps(params, sort_keys=True).encode())
+    return h.hexdigest()[:16]
+
+
 def sources_json() -> str:
     src = [{"id": "seed", "type": "wfp_csv_s3", "key": "seed/zambia_sample_prices.csv"}, {"id": "field", "type": "s3_inbox", "prefix": "inbox/field/"}]
     if os.environ.get("WFP_CSV_URL"):
@@ -235,6 +252,7 @@ def deploy(env: str, only: list[str] | None, sms_mode: str | None, chaos: str = 
                 params["ChaosErrorRate"] = chaos
             if part == "ingestion":
                 params["SourcesJson"] = sources_json()
+            params["CodeRevision"] = code_revision(part, params)
             sam_deploy(f"{build_dir}/template.yaml", name, params, boot)
         elif part == "web":
             sam_deploy("infra/web.yaml", name, {"Env": env}, boot)

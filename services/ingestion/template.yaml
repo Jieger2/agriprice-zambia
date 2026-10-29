@@ -1,8 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
+Transform:
+  - AWS::LanguageExtensions   # resolves parameter values before SAM decides whether to publish a version
+  - AWS::Serverless-2016-10-31
 Description: AgriPrice Zambia - Service 3, scheduled Price Ingestion (independently deployable stack)
 
 Parameters:
+  CodeRevision:
+    Type: String
+    Default: initial
+    Description: Fingerprint of code, shared layer and settings (scripts/deploy.py); a change publishes a new version to the live alias.
   Env: { Type: String, AllowedValues: [dev, prod] }
   DeploymentType: { Type: String, Default: AllAtOnce }
   LogRetentionDays: { Type: Number, Default: 14 }
@@ -57,6 +63,7 @@ Resources:
       MemorySize: 1024
       LoggingConfig: { LogGroup: !Ref LogGroup }
       AutoPublishAlias: live
+      AutoPublishCodeSha256: !Ref CodeRevision
       DeploymentPreference: { Type: !Ref DeploymentType }
       EventInvokeConfig: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 }
       DeadLetterQueue: { Type: SQS, TargetArn: !ImportValue { "Fn::Sub": "agriprice-${Env}-IngestionDlqArn" } }

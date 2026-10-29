@@ -1,8 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
+Transform:
+  - AWS::LanguageExtensions   # resolves parameter values before SAM decides whether to publish a version
+  - AWS::Serverless-2016-10-31
 Description: AgriPrice Zambia - Service 1, USSD/SMS Gateway (independently deployable stack)
 
 Parameters:
+  CodeRevision:
+    Type: String
+    Default: initial
+    Description: Fingerprint of code, shared layer and settings (scripts/deploy.py); a change publishes a new version to the live alias.
   Env: { Type: String, AllowedValues: [dev, prod] }
   SmsMode: { Type: String, AllowedValues: [log, outbox, sandbox, live], Default: sandbox }
   AllowedCidrs: { Type: String, Default: "", Description: Optional comma-separated CIDRs for Africa's Talking callbacks }
@@ -72,6 +78,7 @@ Resources:
       Handler: ussd_app.handler
       LoggingConfig: { LogGroup: !Ref LogGroup }
       AutoPublishAlias: live
+      AutoPublishCodeSha256: !Ref CodeRevision
       DeploymentPreference:
         Type: !Ref DeploymentType
         Alarms: [!Ref ErrorsAlarm, !Ref LatencyAlarm]
