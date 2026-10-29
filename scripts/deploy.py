@@ -287,6 +287,23 @@ def show_outputs(env: str) -> dict:
     return info
 
 
+def wait_for_athena(query_id: str) -> bool:
+    """Poll the curation query instead of sleeping a fixed time; print AWS's reason if it fails."""
+    athena = boto3.client("athena", region_name=REGION)
+    for _ in range(60):
+        q = athena.get_query_execution(QueryExecutionId=query_id)["QueryExecution"]
+        state = q["Status"]["State"]
+        if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            scanned = q.get("Statistics", {}).get("DataScannedInBytes", 0)
+            log(f"  Athena curation {state} ({scanned / 1e6:.1f} MB scanned)")
+            if state != "SUCCEEDED":
+                log("  reason: " + q["Status"].get("StateChangeReason", "(none given)")[:600])
+            return state == "SUCCEEDED"
+        time.sleep(5)
+    log("  Athena curation still running after 5 minutes; run run-pipeline again later")
+    return False
+
+
 def run_pipeline(env: str) -> None:
     lam = boto3.client("lambda", region_name=REGION)
     for fn, payload in ((f"agriprice-{env}-ingestion", {"lookback_days": 3650}), (f"agriprice-{env}-analytics-api", {"action": "refresh"})):
@@ -295,8 +312,16 @@ def run_pipeline(env: str) -> None:
         body = resp["Payload"].read().decode()
         log(f"  -> {resp.get('FunctionError', 'OK')} {body[:300]}")
         if fn.endswith("ingestion"):
-            log("waiting 45 s for the Athena curation query to finish...")
-            time.sleep(45)
+            try:
+                qids = [r["athena_query"] for r in json.loads(body).get("results", []) if isinstance(r, dict) and r.get("athena_query")]
+            except (ValueError, AttributeError):
+                qids = []
+            if qids:
+                log("waiting for the Athena curation query...")
+                for qid in qids:
+                    wait_for_athena(qid)
+            else:
+                log("no Athena curation query was started (no new rows, or ingestion failed)")
 
 
 def bootstrap() -> None:
@@ -403,6 +428,19 @@ def diagnose(env: str) -> None:
             print(f"      {a['StartTime']:%H:%M:%S} {a['StatusCode']:12} {a.get('StatusMessage', '')[:400]}")
     if not groups:
         print("  NAT group: none found")
+    athena = boto3.client("athena", region_name=REGION)
+    wg = f"agriprice-{env}"
+    try:
+        ids = athena.list_query_executions(WorkGroup=wg, MaxResults=6).get("QueryExecutionIds", [])
+        print(f"  Athena (workgroup {wg}), newest first:")
+        for q in athena.batch_get_query_execution(QueryExecutionIds=ids)["QueryExecutions"] if ids else []:
+            st = q["Status"]
+            sql = " ".join(q["Query"].split())[:70]
+            print(f"      {st['State']:10} {sql}")
+            if st["State"] != "SUCCEEDED" and st.get("StateChangeReason"):
+                print(f"                 reason: {st['StateChangeReason'][:500]}")
+    except ClientError as exc:
+        print(f"  Athena: {exc.response['Error']['Message']}")
 
 
 def add_user(env: str, email: str, role: str) -> None:
