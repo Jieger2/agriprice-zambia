@@ -263,3 +263,20 @@ def test_role_change_errors_are_clean(api, ctx, pool):
     assert call(api, ctx, "POST", "/api/admin/users", body={"email": "a@b.zm", "phone": "0966000111", "group": "buyers"}, **ADMIN)[0] == 400
     status, body = call(api, ctx, "POST", "/api/admin/users/a%40b.zm/roles", body={"group": "admins", "action": "add"}, **ADMIN)
     assert status == 200 and "admins" in body["groups"]
+
+
+def test_sources_json_survives_windows_quote_stripping(monkeypatch):
+    """sam.cmd on Windows strips double quotes, so deploy.py sends the sources base64-encoded."""
+    import sys
+    from pathlib import Path
+
+    from agricommon import sources
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import deploy
+
+    monkeypatch.setenv("SOURCES_JSON", deploy.sources_json())
+    assert '"' not in deploy.sources_json() and "=" not in deploy.sources_json()
+    assert [s["id"] for s in sources.builtin()] == ["seed", "field"]
+    monkeypatch.setenv("SOURCES_JSON", '[{"id":"x","type":"s3_inbox","prefix":"p/"}]')
+    assert sources.builtin()[0]["id"] == "x"
