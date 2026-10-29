@@ -1,11 +1,12 @@
 // Service worker: stale-while-revalidate app shell. API responses are handled by app.js (ETag + localStorage).
 // config.js is NEVER cached: it differs per environment (local emulator vs AWS) and a stale copy breaks sign-in.
-const SHELL = 'agriprice-shell-v3';
+const SHELL = 'agriprice-shell-v4';
 const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 const NEVER_CACHE = ['/config.js', '/sw.js'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' bypasses the browser's HTTP cache so a new release never stores yesterday's files
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

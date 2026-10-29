@@ -2,7 +2,8 @@
    ETag/304 revalidation, delta sync of prices, last-known data shown offline, and an
    outbox that retries writes with Idempotency-Key headers so a retry never duplicates.
 
-   Pages: Prices (public) · Trends (public) · Buy (buyers) · Officer (officers) · Admin (admins).
+   Pages: Home/landing (public) · Prices (public) · Trends (public) · Buy (buyers) · Officer (officers) · Admin (admins).
+   The enlarged logo opens the page ribbon on every page.
    Sign-in: Cognito hosted UI (code + PKCE) when deployed; a role picker when
    window.AGRI.mockAuth is set by the local emulator. */
 (() => {
@@ -73,7 +74,7 @@
   }
   function logout() {
     store.del('id_token'); store.del('id_exp');
-    if (CFG.mockAuth || !CFG.cognitoDomain) { renderAuth(); selectTab('prices'); return; }
+    if (CFG.mockAuth || !CFG.cognitoDomain) { renderAuth(); selectTab('home'); return; }
     location.assign(`https://${CFG.cognitoDomain}/logout?${new URLSearchParams({ client_id: CFG.clientId, logout_uri: redirectUri() })}`);
   }
 
@@ -413,6 +414,79 @@
     load().catch((err) => toast(err.message));
   }
 
+
+  // ---------------------------------------------------------------- Home / landing
+  // Team shown on the landing page. Edit here (and TEAM.md) when roles change.
+  const TEAM = [
+    ['Idan Musama Mwaba', 'Team Lead & Cloud Architect'],
+    ['Benaiah Masase', 'DevOps & Security'],
+    ['Victor William Kangomu', 'Observability & Reliability'],
+    ['Jeriah Chikwanda', 'Backend API'],
+    ['Oliver Kakungu', 'Data & Analytics'],
+    ['Mwewa Chibu', 'Frontend, USSD & QA'],
+  ];
+  // Hand-drawn crop icons (inline SVG: a few hundred bytes each, nothing to download on 2G).
+  const S = 'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"';
+  const ICONS = {
+    MZE: `<path d="M32 10c8 0 11 9 11 20s-4 22-11 22-11-11-11-22 3-20 11-20z" fill="var(--accent2)" ${S}/><path d="M27 18v28M32 14v34M37 18v28M23 26h18M22 34h20M23 42h18" ${S} opacity=".55"/><path d="M21 30c-7 4-9 13-6 22 6-2 11-7 13-14M43 30c7 4 9 13 6 22-6-2-11-7-13-14" fill="var(--leaf)" ${S}/>`,
+    SOY: `<path d="M14 40c4-14 14-22 30-26 4 10-2 26-18 30-6 2-10 0-12-4z" fill="var(--leaf)" ${S}/><circle cx="25" cy="36" r="4.5" fill="var(--accent2)" ${S}/><circle cx="33" cy="29" r="4.5" fill="var(--accent2)" ${S}/><circle cx="40" cy="22" r="4" fill="var(--accent2)" ${S}/><path d="M44 14l6-6" ${S}/>`,
+    GNT: `<path d="M22 14c-8 0-10 9-6 15-4 6-2 15 6 15 3 0 5-2 6-4 2 3 5 6 10 6 8 0 11-9 7-15 4-7 1-17-8-17-4 0-7 3-8 6-1-4-4-6-7-6z" fill="var(--accent2)" ${S}/><path d="M20 22l2 2M26 32l2 2M36 22l2 2M38 38l2 2" ${S} opacity=".55"/>`,
+    BNS: `<ellipse cx="22" cy="24" rx="9" ry="6" transform="rotate(-25 22 24)" fill="var(--bean)" ${S}/><ellipse cx="40" cy="22" rx="9" ry="6" transform="rotate(20 40 22)" fill="var(--bean)" ${S}/><ellipse cx="31" cy="40" rx="10" ry="6.5" transform="rotate(-8 31 40)" fill="var(--bean)" ${S}/><path d="M28 39c2 2 5 2 7 0" ${S}/>`,
+    RCE: `<path d="M10 34h44c0 11-10 18-22 18S10 45 10 34z" fill="var(--card)" ${S}/><path d="M16 34c2-8 9-12 16-12s14 4 16 12" fill="#f3efe2" ${S}/><path d="M24 28l2-1M31 25l2 1M38 28l1 2M28 31l2 0M35 31l1-1" ${S}/>`,
+    CAS: `<path d="M12 22c10-6 30-6 42 0-4 6-28 10-42 0z" fill="var(--bean)" ${S}/><path d="M14 38c10-5 26-4 38 3-6 5-26 6-38-3z" fill="var(--bean)" ${S}/><path d="M50 18l6-4M48 40l7 1" ${S}/>`,
+    MML: `<path d="M18 16h28l4 36H14z" fill="var(--card)" ${S}/><path d="M18 16c4-4 24-4 28 0" ${S}/><path d="M22 30h20M24 38h16" ${S} opacity=".55"/><path d="M28 26c2-6 6-6 8 0" fill="var(--accent2)" ${S}/>`,
+  };
+  const GENERIC = `<path d="M32 52V28" ${S}/><path d="M32 34c-2-10-10-14-18-13 0 9 7 15 18 13z" fill="var(--leaf)" ${S}/><path d="M32 30c2-11 10-16 19-15 0 10-8 17-19 15z" fill="var(--leaf)" ${S}/>`;
+  const cropIcon = (code) => `<svg viewBox="0 0 64 64" aria-hidden="true">${ICONS[code] || GENERIC}</svg>`;
+  const LAND = { page: 0, per: 3, avg: new Map() };
+
+  async function cropAverage(code) {
+    if (LAND.avg.has(code)) return LAND.avg.get(code);
+    const { data } = await getJSON('/api/prices?c=' + encodeURIComponent(code));  // every market; ETag-cached
+    const rows = (data || []).filter((r) => r.p > 0);
+    const res = rows.length ? {
+      p: rows.reduce((a, r) => a + r.p, 0) / rows.length,
+      t: Math.round(rows.reduce((a, r) => a + (r.t || 0), 0) / rows.length),
+      n: rows.length,
+      d: rows.reduce((mx, r) => Math.max(mx, r.d), 0),
+    } : null;
+    LAND.avg.set(code, res);
+    return res;
+  }
+  async function renderLanding() {
+    const crops = REF.c || [];
+    const pages = Math.max(1, Math.ceil(crops.length / LAND.per));
+    LAND.page = Math.min(LAND.page, pages - 1);
+    const slice = crops.slice(LAND.page * LAND.per, LAND.page * LAND.per + LAND.per);
+    $('#pager').innerHTML = pages > 1 ? '<span class="muted">Page</span>' + Array.from({ length: pages }, (_, i) => `<button type="button" data-page="${i}"${i === LAND.page ? ' aria-current="page"' : ''}>${i + 1}</button>`).join('') : '';
+    const card = ([code, name], a) => `<button type="button" class="crop-card" data-crop="${esc(code)}" aria-label="${esc(name)} prices">
+        <span class="crop-pic">${cropIcon(code)}</span>
+        <span class="crop-info"><b class="crop-name">${esc(name)}</b><small>Unit price</small>
+        ${a ? `<span class="crop-price">K${kwacha(a.p)} <small class="${a.t > 0 ? 'up' : a.t < 0 ? 'down' : 'muted'}">${pct(a.t)}</small></span><small class="muted">${a.n} market${a.n === 1 ? '' : 's'} · latest ${dayToDate(a.d)}</small>`
+          : '<span class="crop-price">K -- </span><small class="muted">no prices yet</small>'}</span>
+      </button>`;
+    $('#crop-cards').innerHTML = slice.map((c) => card(c, LAND.avg.get(c[0]))).join('');
+    const results = await Promise.allSettled(slice.map((c) => cropAverage(c[0])));
+    if (slice.every((c, i) => results[i].status === 'fulfilled')) $('#crop-cards').innerHTML = slice.map((c) => card(c, LAND.avg.get(c[0]))).join('');
+    else $('#crop-cards').insertAdjacentHTML('beforeend', '<p class="muted small">Some prices could not be loaded (offline?).</p>');
+  }
+  function onLandingClick(e) {
+    const pg = e.target.closest('button[data-page]');
+    if (pg) { LAND.page = Number(pg.dataset.page); renderLanding(); return; }
+    const c = e.target.closest('button[data-crop]');
+    if (c) { $('#price-form select[name=c]').value = c.dataset.crop; selectTab('prices'); showPrices(); }
+  }
+  function renderTeam() { $('#team').innerHTML = TEAM.map(([n, r]) => `<li><b>${esc(n)}</b> <span class="muted">${esc(r)}</span></li>`).join(''); }
+
+  // Ribbon (opened by the logo on every page)
+  function setRibbon(open) {
+    document.body.classList.toggle('ribbon-open', open);
+    $('#logo').setAttribute('aria-expanded', String(open));
+    $('#logo').setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    $('#scrim').hidden = !open;
+    if (open) { const b = $('.tabs button[aria-selected=true]') || $('.tabs button'); b.focus(); }
+  }
+
   // ---------------------------------------------------------------- shell
   function selectTab(name) {
     $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
@@ -421,6 +495,9 @@
     if (name === 'buy') loadMine();
     if (name === 'officer') { if (!$('#board').innerHTML) showBoard(); loadFarmers(); }
     if (name === 'admin') selectSub($('.subtabs button[aria-selected=true]').dataset.sub);
+    if (name === 'home') renderLanding();
+    setRibbon(false);
+    window.scrollTo(0, 0);
   }
   function renderAuth() {
     const c = claims(), g = groups();
@@ -429,7 +506,7 @@
     $$('.tabs button[data-role]').forEach((b) => (b.hidden = !(g.includes(b.dataset.role) || g.includes('admins'))));
     $('#pending').hidden = !(c && !g.length);
     const current = $('.tabs button[aria-selected=true]');
-    if (current && current.hidden) selectTab('prices');
+    if (current && current.hidden) selectTab('home');
   }
   const netStatus = () => ($('#net').textContent = navigator.onLine ? 'online' : 'offline');
 
@@ -451,10 +528,15 @@
     $('#adm-sources').addEventListener('click', onSourceClick); $('#adm-users').addEventListener('change', onRoleChange);
     $('#mine').addEventListener('click', closeDemand);
     $('#farmers').addEventListener('click', onFarmersClick); $('#farmers').addEventListener('submit', onFarmerAlert);
+    $('#home').addEventListener('click', onLandingClick);
+    $('#logo').addEventListener('click', () => setRibbon(!document.body.classList.contains('ribbon-open')));
+    $('#scrim').addEventListener('click', () => setRibbon(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('ribbon-open')) { setRibbon(false); $('#logo').focus(); } });
+    renderTeam();
     outbox.save(outbox.all());
     await finishLogin().catch(() => toast('Sign-in failed'));
     renderAuth();
-    try { await loadRef(); await showPrices(); } catch { $('#price-meta').textContent = 'Offline and no saved data yet.'; }
+    try { await loadRef(); renderLanding(); await showPrices(); } catch { $('#price-meta').textContent = 'Offline and no saved data yet.'; $('#crop-cards').innerHTML = '<p class="muted">Offline and no saved prices yet.</p>'; }
     flush();
     if ('serviceWorker' in navigator) {
       if (CFG.mockAuth) {

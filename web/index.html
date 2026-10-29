@@ -8,28 +8,61 @@
 <title>AgriPrice Zambia</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <header class="top">
+  <button id="logo" class="logo" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="ribbon">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#fff"/><path d="M32 52V30" stroke="#2f5d34" stroke-width="3.5" stroke-linecap="round"/><path d="M32 34c-2-11-11-16-21-15 0 10 8 17 21 15z" fill="#4f8a4f"/><path d="M32 30c2-12 11-18 22-17 0 11-9 19-22 17z" fill="#2f5d34"/><path d="M20 52h24" stroke="#c98a1b" stroke-width="3.5" stroke-linecap="round"/></svg>
+  </button>
   <h1>AgriPrice <span>Zambia</span></h1>
   <a id="sim-link" class="link" href="simulator.html" hidden>Phone simulator</a>
   <span id="net" class="pill" aria-live="polite"></span>
   <button id="auth" class="link" type="button">Sign in</button>
 </header>
 
-<nav class="tabs" role="tablist">
-  <button role="tab" data-tab="prices" aria-selected="true">Prices</button>
+<!-- Ribbon: the logo opens it on every page (replaces the old tab bar; same buttons, same roles). -->
+<nav id="ribbon" class="tabs ribbon" role="tablist" aria-label="Pages">
+  <button role="tab" data-tab="home" aria-selected="true">Home</button>
+  <button role="tab" data-tab="prices">Prices</button>
   <button role="tab" data-tab="trends">Trends</button>
   <button role="tab" data-tab="buy" data-role="buyers">Buy</button>
   <button role="tab" data-tab="officer" data-role="officers">Officer</button>
   <button role="tab" data-tab="admin" data-role="admins">Admin</button>
 </nav>
+<div id="scrim" class="scrim" hidden></div>
 
 <main>
   <p id="pending" class="banner" hidden>Your account is signed in but has no role yet. An administrator assigns Buyer, Extension officer or Administrator on the Admin page (Users &amp; roles).</p>
+  <!-- ============================================================ Home / landing (public) -->
+  <section id="home" class="panel">
+    <div class="bio">
+      <h2>Know the price before you sell</h2>
+      <p>AgriPrice Zambia gives smallholder farmers, buyers and extension officers the same up-to-date picture of crop prices across Zambia's markets, on any phone.</p>
+      <ul class="how">
+        <li><b>Check prices</b> Dial <b>*384*1#</b> on any phone, or use this site: today's price at the three nearest markets, in English, Bemba or Nyanja.</li>
+        <li><b>Sell and get matched</b> List a crop; buyers nearby who want it get an SMS, and so do you.</li>
+        <li><b>Plan with trends</b> Monthly prices since 2003 and a four-week forecast, from WFP and ZamStats market data.</li>
+      </ul>
+    </div>
+    <h2>Today's prices <small class="muted">national average per 50 kg bag</small></h2>
+    <div id="crop-cards" class="crop-cards" aria-live="polite"><p class="muted">Loading prices...</p></div>
+    <nav id="pager" class="pager" aria-label="Crop pages"></nav>
+    <div class="about two">
+      <section>
+        <h3>Contact us</h3>
+        <p><a href="mailto:agrizambia5@gmail.com">agrizambia5@gmail.com</a><br>USSD: <b>*384*1#</b> · SMS <b>PRICE MAIZE</b><br><span class="muted small">Buyers, extension officers and administrators: use Sign in above.</span></p>
+      </section>
+      <section>
+        <h3>Team</h3>
+        <ul id="team" class="team"></ul>
+        <p class="muted small">Cloud Application Development · Lecturer: Mr Mwiiya</p>
+      </section>
+    </div>
+  </section>
+
   <!-- ============================================================ Prices (public, FR3) -->
-  <section id="prices" class="panel">
+  <section id="prices" class="panel" hidden>
     <form id="price-form" class="row">
       <label>Crop <select name="c" class="crops"></select></label>
       <label>Near <select name="near" class="markets-any"></select></label>
@@ -222,6 +255,6 @@
 
 <footer class="muted small">Outbox: <span id="outbox">0</span> pending · <span id="who"></span></footer>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

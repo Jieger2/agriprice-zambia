@@ -1,5 +1,5 @@
-:root{--bg:#f7f5ef;--fg:#1d2a1f;--muted:#5d6b5f;--accent:#2f5d34;--accent2:#c98a1b;--line:#d9d4c7;--card:#fff;--up:#a33b20;--down:#2f6d3a}
-@media (prefers-color-scheme:dark){:root{--bg:#141a15;--fg:#e9ede6;--muted:#a3b0a4;--accent:#7fbf7f;--accent2:#e2a93b;--line:#2c352d;--card:#1b231c;--up:#f08a6c;--down:#8fd28f}}
+:root{--leaf:#7fae6a;--bean:#c9895a;--bg:#f7f5ef;--fg:#1d2a1f;--muted:#5d6b5f;--accent:#2f5d34;--accent2:#c98a1b;--line:#d9d4c7;--card:#fff;--up:#a33b20;--down:#2f6d3a}
+@media (prefers-color-scheme:dark){:root{--leaf:#5d8f52;--bean:#a8714a;--bg:#141a15;--fg:#e9ede6;--muted:#a3b0a4;--accent:#7fbf7f;--accent2:#e2a93b;--line:#2c352d;--card:#1b231c;--up:#f08a6c;--down:#8fd28f}}
 *{box-sizing:border-box}
 body{margin:0;font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg)}
 .top{display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;background:var(--accent);color:#fff}
@@ -59,3 +59,44 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .farmer form{margin-top:.4rem}
 .farmer form label{font-size:.75rem}
 .farmer input,.farmer select{min-height:2rem;padding:.25rem .4rem}
+/* --- landing page, logo menu (ribbon) --- */
+.top{position:sticky;top:0;z-index:30;min-height:3.6rem}
+.logo{width:3.6rem;height:3.6rem;padding:0;border-radius:50%;border:3px solid #fff;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.25);margin:0 0 -1.6rem;flex:none;cursor:pointer;transition:transform .15s}
+.logo svg{width:100%;height:100%;display:block}
+.logo:hover,.logo[aria-expanded=true]{transform:scale(1.06)}
+.logo:focus-visible{outline:3px solid var(--accent2);outline-offset:2px}
+.ribbon{position:fixed;z-index:25;top:3.6rem;left:0;bottom:0;width:min(16rem,80vw);flex-direction:column;overflow-y:auto;border:0;border-right:1px solid var(--line);box-shadow:4px 0 14px rgba(0,0,0,.18);transform:translateX(-105%);transition:transform .2s ease;padding-top:1.4rem;visibility:hidden}
+body.ribbon-open .ribbon{transform:none;visibility:visible}
+.ribbon button{flex:none;text-align:left;padding:.85rem 1.2rem;border-bottom:0;border-left:4px solid transparent;font-size:1rem}
+.ribbon button[aria-selected=true]{border-left-color:var(--accent2);border-bottom-color:transparent;background:rgba(127,174,106,.12)}
+.scrim{position:fixed;inset:3.6rem 0 0 0;z-index:20;background:rgba(0,0,0,.35)}
+@media (prefers-reduced-motion:reduce){.ribbon,.logo{transition:none}}
+#home{padding-top:.8rem}
+.bio h2{font-size:1.35rem;margin:.8rem 0 .4rem}
+.bio p{margin:.2rem 0 .6rem}
+.how{list-style:none;padding:0;margin:.4rem 0 1rem;display:grid;gap:.5rem}
+.how li{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.55rem .75rem;font-size:.92rem}
+.how li>b:first-child{display:block;color:var(--accent)}
+#home h2 small{font-weight:400;font-size:.8rem}
+.crop-cards{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))}
+.crop-card{display:flex;gap:.9rem;align-items:center;text-align:left;width:100%;padding:.7rem;border:1px solid var(--line);border-radius:.6rem;background:var(--card);cursor:pointer;min-height:auto}
+.crop-card:hover{border-color:var(--accent)}
+.crop-pic{flex:none;width:5.2rem;height:5.2rem;border:2px solid var(--fg);border-radius:.35rem;padding:.35rem;color:var(--fg);background:var(--bg)}
+.crop-pic svg{width:100%;height:100%;display:block}
+.crop-info{display:grid;gap:.1rem}
+.crop-name{font-size:1.05rem}
+.crop-info small{font-size:.78rem}
+.crop-price{font-size:1.3rem;font-weight:700;font-variant-numeric:tabular-nums}
+.crop-price small{font-size:.75rem;font-weight:600}
+.pager{display:flex;gap:.35rem;align-items:center;margin:.9rem 0 .3rem;font-size:1rem}
+.pager button{min-width:2.4rem;min-height:2.4rem;padding:.2rem .5rem;background:none;border-color:transparent;font-weight:600;color:var(--accent)}
+.pager button[aria-current=page]{border:2px solid var(--fg);color:var(--fg)}
+.about{margin-top:1.4rem;padding-top:.6rem;border-top:1px solid var(--line)}
+.about h3{margin:.6rem 0 .3rem}
+.team{list-style:none;padding:0;margin:0;display:grid;gap:.25rem;font-size:.9rem}
+.about a{color:var(--accent)}
+.top .link{white-space:nowrap}
+@media (max-width:30rem){.top{gap:.45rem;padding:.6rem .7rem}.top h1{font-size:1rem;line-height:1.15}.top h1 span{display:block}.top a.link{font-size:.75rem;padding:.25rem .45rem}.logo{width:3.2rem;height:3.2rem}}
+@media (prefers-color-scheme:dark){.top{background:#1f3d23}}
+.crop-price{white-space:nowrap}
+@media (min-width:40rem){.crop-pic{width:4.4rem;height:4.4rem}.crop-card{gap:.7rem}}
