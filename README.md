@@ -102,6 +102,8 @@ Without a key, deployments use `SMS_MODE=outbox`: messages are stored instead of
 
 ### Price data
 
+**Real prices in one command:** `python scripts/deploy.py load-wfp --env dev` downloads the WFP Zambia food-price CSV from HDX (2003 onwards; sources include CSO/ZamStats, FEWS NET and WFP), uploads it to the lake and registers it as source `wfp`. Then run `run-pipeline`. Trends use real sources and ignore the synthetic seed once any real data is present. If HDX is unreachable, download the CSV by hand and add `--file <path>`.
+
 The `seed` source loads the synthetic CSV so every feature can be demonstrated. For real prices, set `WFP_CSV_URL` (a GitHub repository variable, or an environment variable for local deploys) to the download link of the *Zambia – Food Prices* CSV on the Humanitarian Data Exchange (WFP dataset). Officers' field reports form the third source.
 
 ## Key design decisions

@@ -12,6 +12,7 @@ Usage:
   python scripts/deploy.py add-user --env dev --email you@example.com --role admins   # invite the first admin
   python scripts/deploy.py doctor                    # check tools, credentials and Region before deploying
   python scripts/deploy.py diagnose --env dev        # stack status, failure reasons, NAT launch attempts
+  python scripts/deploy.py load-wfp --env dev        # real prices: WFP/ZamStats Zambia CSV from HDX (2003 onwards)
   python scripts/deploy.py destroy --env dev
 
 Environment variables (optional):
@@ -306,7 +307,7 @@ def wait_for_athena(query_id: str) -> bool:
 
 def run_pipeline(env: str) -> None:
     lam = boto3.client("lambda", region_name=REGION)
-    for fn, payload in ((f"agriprice-{env}-ingestion", {"lookback_days": 3650}), (f"agriprice-{env}-analytics-api", {"action": "refresh"})):
+    for fn, payload in ((f"agriprice-{env}-ingestion", {"lookback_days": 9000}), (f"agriprice-{env}-analytics-api", {"action": "refresh"})):
         log(f"invoking {fn}")
         resp = lam.invoke(FunctionName=f"{fn}:live", Payload=json.dumps(payload).encode())
         body = resp["Payload"].read().decode()
@@ -443,6 +444,56 @@ def diagnose(env: str) -> None:
         print(f"  Athena: {exc.response['Error']['Message']}")
 
 
+HDX_PACKAGE = "https://data.humdata.org/api/3/action/package_show?id=wfp-food-prices-for-zambia"
+WFP_KEY = "seed/wfp_food_prices_zmb.csv"
+
+
+def _http_get(url: str) -> bytes:
+    import urllib.request
+
+    if not url.startswith("https://"):
+        sys.exit(f"refusing non-HTTPS download: {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "agriprice-zambia/1.0 (student project)"})  # noqa: S310 - https checked above
+    with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 - https checked above
+        return resp.read()
+
+
+def load_wfp(env: str, file: str | None) -> None:
+    """Download the WFP Zambia food-price CSV (HDX) on this computer, upload it to the lake and register it as a source.
+
+    The dataset credits CSO/ZamStats, FEWS NET and WFP; it is read like the seed file, so the
+    Lambda functions need no internet access for it.
+    """
+    if file:
+        body = Path(file).read_bytes()
+        log(f"using {file} ({len(body) / 1e6:.1f} MB)")
+    else:
+        pkg = json.loads(_http_get(HDX_PACKAGE))["result"]
+        csvs = [r for r in pkg["resources"] if r.get("format", "").lower() == "csv" and "quickchart" not in (r.get("name", "") + r.get("url", "")).lower()]
+        if not csvs:
+            sys.exit("No CSV resource found on HDX. Download 'Zambia - Food Prices' by hand and rerun with --file <path>.")
+        res = csvs[0]
+        log(f"downloading {res.get('name')} (updated {str(res.get('last_modified', ''))[:10]}) from HDX ...")
+        body = _http_get(res["url"])
+        log(f"  {len(body) / 1e6:.1f} MB")
+    head = body[:400].decode("utf-8", "replace").lower()
+    if "commodity" not in head or "price" not in head:
+        sys.exit("That file does not look like the WFP food-price CSV (no commodity/price columns).")
+    data = outputs(stack_name(env, "data"))
+    bucket, table = data.get("LakeBucketName"), data.get("TableName")
+    if not bucket or not table:
+        sys.exit("The data stack is not deployed yet: run deploy first.")
+    boto3.client("s3", region_name=REGION).put_object(Bucket=bucket, Key=WFP_KEY, Body=body, ContentType="text/csv")
+    log(f"uploaded to s3://{bucket}/{WFP_KEY}")
+    tbl = boto3.resource("dynamodb", region_name=REGION).Table(table)
+    item = tbl.get_item(Key={"PK": "CONFIG#sources", "SK": "CURRENT"}).get("Item")
+    doc = json.loads(item["doc"]) if item else {"sources": []}
+    doc["sources"] = [s for s in doc.get("sources", []) if s.get("id") != "wfp"]
+    doc["sources"].append({"id": "wfp", "type": "wfp_csv_s3", "key": WFP_KEY, "enabled": True, "label": "WFP / ZamStats Zambia food prices (HDX)"})
+    tbl.put_item(Item={"PK": "CONFIG#sources", "SK": "CURRENT", "doc": json.dumps(doc, separators=(",", ":")), "by": "deploy.py", "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    log("registered source 'wfp' (visible on Admin > Price sources). Next: python scripts/deploy.py run-pipeline --env " + env)
+
+
 def add_user(env: str, email: str, role: str) -> None:
     """Invite a web user (Cognito emails a temporary password) and put them in a role group."""
     pool = outputs(stack_name(env, "data")).get("UserPoolId")
@@ -461,19 +512,22 @@ def add_user(env: str, email: str, role: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["doctor", "diagnose", "bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "add-user", "demo-rollback", "destroy"])
+    ap.add_argument("command", choices=["doctor", "diagnose", "bootstrap", "deploy", "secrets", "outputs", "run-pipeline", "load-wfp", "add-user", "demo-rollback", "destroy"])
     ap.add_argument("--env", default="dev", choices=["dev", "prod"])
     ap.add_argument("--only", help="comma-separated parts: " + ",".join(ORDER))
     ap.add_argument("--sms-mode", choices=["log", "outbox", "sandbox", "live"])
     ap.add_argument("--rotate", action="store_true", help="secrets: regenerate pepper and callback token")
     ap.add_argument("--rate", default="0.5", help="demo-rollback: fraction of requests that fail")
     ap.add_argument("--email", help="add-user: the person's email address")
+    ap.add_argument("--file", help="load-wfp: use a CSV you downloaded instead of fetching it from HDX")
     ap.add_argument("--role", default="admins", choices=["admins", "officers", "buyers"], help="add-user: role group")
     a = ap.parse_args()
     if a.command == "doctor":
         doctor()
     elif a.command == "diagnose":
         diagnose(a.env)
+    elif a.command == "load-wfp":
+        load_wfp(a.env, a.file)
     elif a.command == "add-user":
         if not a.email:
             ap.error("add-user needs --email")
