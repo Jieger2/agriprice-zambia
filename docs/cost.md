@@ -18,7 +18,7 @@ The estimates use published on-demand prices from the thesis (us-east-1, October
 
 ## 10× load
 
-The total rises to about **$25.42**. API Gateway and log ingestion grow; Lambda stays inside the free tier. At this scale switch DynamoDB to **on-demand** (about $1.69 a month at 1.5 M writes and 6 M reads). The table stays provisioned for the project because auto-scaling must be demonstrated.
+The total rises to about **$22.36**. API Gateway and log ingestion grow; Lambda stays inside the free tier. At this scale switch DynamoDB to **on-demand** (about $1.69 a month at 1.5 M writes and 6 M reads). The table stays provisioned for the project because auto-scaling must be demonstrated.
 
 ## Optimisations implemented
 
